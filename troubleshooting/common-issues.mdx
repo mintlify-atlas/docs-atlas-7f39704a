@@ -1,0 +1,464 @@
+---
+title: 'Common Issues'
+description: 'Troubleshoot common problems with the Siigo Corprecam Scraper'
+---
+
+## Overview
+
+This guide covers the most common issues you may encounter when running the Siigo Corprecam Scraper and their solutions.
+
+---
+
+## Environment Variable Issues
+
+<Warning>
+  Missing or incorrect environment variables are the **most common** cause of startup failures.
+</Warning>
+
+<Accordion title="Error: Missing NGROK_AUTHTOKEN">
+  **Symptom:** Server fails to start or ngrok tunnel doesn't establish.
+  
+  **Cause:** The `NGROK_AUTHTOKEN` environment variable is not set in your `.env` file.
+  
+  **Solution:**
+  
+  1. Get your ngrok auth token from [ngrok dashboard](https://dashboard.ngrok.com/get-started/your-authtoken)
+  2. Add it to your `.env` file:
+  
+  ```bash
+  NGROK_AUTHTOKEN=your_token_here
+  ```
+  
+  3. Restart the server
+  
+  **Related Code:** See `config.ts:7` and `server.ts:46-49`
+</Accordion>
+
+<Accordion title="Error: Missing Siigo Credentials">
+  **Symptom:** Login fails or automation stops at login page.
+  
+  **Cause:** Missing `USER_SIIGO_CORPRECAM` or `PASSWORD_SIIGO_CORPRECAM` in environment variables.
+  
+  **Solution:**
+  
+  Add your Siigo credentials to `.env`:
+  
+  ```bash
+  USER_SIIGO_CORPRECAM=your_username
+  PASSWORD_SIIGO_CORPRECAM=your_password
+  ```
+  
+  <Warning>
+    Never commit your `.env` file to version control. Keep credentials secure.
+  </Warning>
+  
+  **Related Code:** See `config.ts:8-9` and `main.ts:23-24`
+</Accordion>
+
+<Accordion title="Error: Database Connection Failed">
+  **Symptom:** Server starts but API requests fail with database errors.
+  
+  **Cause:** Missing or incorrect database configuration.
+  
+  **Solution:**
+  
+  Verify all database environment variables in `.env`:
+  
+  ```bash
+  DB_HOST=localhost
+  DB_USER=your_db_user
+  DB_PASSWORD=your_db_password
+  DB_DATABASE=corprecam_db
+  DB_PORT=3306
+  ```
+  
+  Test the connection:
+  
+  ```bash
+  mysql -h localhost -u your_db_user -p -P 3306
+  ```
+  
+  **Related Code:** See `config.ts:10-14`
+</Accordion>
+
+---
+
+## Playwright Timeout Issues
+
+<Accordion title="TimeoutError: Waiting for selector timed out">
+  **Symptom:** Script fails with timeout error after 30-60 seconds.
+  
+  **Cause:** Page elements not loading within expected time, or incorrect selectors.
+  
+  **Common Locations:**
+  - Login page: `#siigoSignInName`, `#siigoPassword`
+  - Company selection: `tr` with company NIT
+  - Document creation: `a[data-value="Documento soporte"]`
+  - Product input: `#trEditRow #editProduct #autocomplete_autocompleteInput`
+  
+  **Solution:**
+  
+  The scraper uses a **60-second timeout** for critical operations:
+  
+  ```typescript
+  await page.waitForLoadState('domcontentloaded', { timeout: 60000 });
+  ```
+  
+  If timeouts persist:
+  
+  1. Check your internet connection
+  2. Verify Siigo website is accessible
+  3. Run with headless: false to see what's happening (see [Debugging Guide](/troubleshooting/debugging))
+  
+  **Related Code:** See `utils/functions.ts:25`, `utils/functions.ts:35`, `utils/functions.ts:47`
+</Accordion>
+
+<Accordion title="Error: Element not visible or clickable">
+  **Symptom:** Script fails with "element is not visible" or "element is outside viewport".
+  
+  **Cause:** Angular animations, modal overlays, or dynamic content loading.
+  
+  **Solution:**
+  
+  The scraper includes built-in retry logic for these scenarios:
+  
+  ```typescript
+  await retryUntilSuccess(
+    async () => {
+      await page.locator('#element').click();
+    },
+    { label: 'element click', retries: 5, delayMs: 1000 }
+  );
+  ```
+  
+  If the issue persists:
+  
+  1. The element may have changed in Siigo's UI
+  2. Check for blocking modals or notifications
+  3. Increase retry attempts if needed
+  
+  **Related Code:** See `utils/retryUntilSucces.ts:1-31`
+</Accordion>
+
+<Accordion title="Error: Selector matched multiple elements">
+  **Symptom:** Script clicks wrong element or throws "multiple elements found" error.
+  
+  **Cause:** Non-specific selector matches more than intended.
+  
+  **Solution:**
+  
+  The scraper uses precise selectors with context:
+  
+  ```typescript
+  // Good: Specific selector with context
+  await page.locator('tr', { hasText: nit_empresa })
+    .locator('button', { hasText: 'Ingresar' })
+    .click();
+  
+  // Bad: Too generic
+  await page.locator('button').click();
+  ```
+  
+  **Related Code:** See `utils/functions.ts:42-45` for company selection example
+</Accordion>
+
+---
+
+## Ngrok Connection Issues
+
+<Accordion title="Error: Ngrok tunnel failed to start">
+  **Symptom:** Server starts but ngrok tunnel doesn't establish.
+  
+  **Possible Causes:**
+  
+  1. **Invalid auth token** - Check your ngrok dashboard
+  2. **Port already in use** - Another process is using port 3000
+  3. **Network restrictions** - Firewall blocking ngrok
+  4. **Free plan limits** - Too many active tunnels
+  
+  **Solutions:**
+  
+  Check if port is available:
+  
+  ```bash
+  lsof -i :3000
+  # Kill process if needed
+  kill -9 <PID>
+  ```
+  
+  Change port in `.env`:
+  
+  ```bash
+  PORT=3001
+  ```
+  
+  Verify ngrok configuration:
+  
+  ```bash
+  ngrok config check
+  ```
+  
+  **Related Code:** See `server.ts:46-51`
+</Accordion>
+
+<Accordion title="Ngrok URL not updating in database">
+  **Symptom:** Tunnel starts but webhook URL not accessible.
+  
+  **Cause:** The `setNgrok()` function failed to update the database.
+  
+  **Solution:**
+  
+  1. Check database connection
+  2. Verify the PHP endpoint is accessible:
+  
+  ```bash
+  curl -X POST https://corprecam.codesolutions.com.co/administrativo/set_ngrok.php \
+    -H "Content-Type: application/json" \
+    -d '{"link":"https://test.ngrok.io"}'
+  ```
+  
+  3. Check server logs for ngrok URL
+  
+  **Related Code:** See `api/php.ts:78-89` and `server.ts:51`
+</Accordion>
+
+---
+
+## Siigo Login and Form Issues
+
+<Accordion title="Login fails repeatedly despite correct credentials">
+  **Symptom:** Retry logic exhausted, login never succeeds.
+  
+  **Possible Causes:**
+  
+  1. **Siigo website changes** - UI elements changed
+  2. **Captcha or security check** - Manual verification required
+  3. **Session/cookie issues** - Previous session interfering
+  4. **Wrong company NIT** - Automation looking for wrong company
+  
+  **Solutions:**
+  
+  1. Run with `headless: false` to see login attempt:
+  
+  ```typescript
+  // In utils/functions.ts:4
+  const browser = await firefox.launch({ headless: false });
+  ```
+  
+  2. Verify the company NIT matches:
+  
+  ```typescript
+  // For Corprecam: "900142913"
+  // For Reciclemos: "901328575"
+  ```
+  
+  3. Clear browser state and retry
+  
+  **Related Code:** See `utils/functions.ts:12-89` and `main.ts:25`, `main.ts:38`
+</Accordion>
+
+<Accordion title="Error: Provider (Proveedor) not found">
+  **Symptom:** Script fails when searching for provider by NIT.
+  
+  **Cause:** Provider doesn't exist in Siigo or NIT is incorrect.
+  
+  **Solution:**
+  
+  1. Verify provider exists in Siigo manually
+  2. Check the NIT format (no dots, dashes, or extra spaces)
+  3. Ensure database returns correct `proveedor_id`:
+  
+  ```typescript
+  // The proveedor_id comes from database
+  proveedor_id: compra.comp_asociado
+  ```
+  
+  4. Check autocomplete timing:
+  
+  ```typescript
+  await proveedorInput.pressSequentially(nit); // Slow typing
+  await page.locator('.suggestions tr', { hasText: nit }).first().waitFor();
+  ```
+  
+  **Related Code:** See `utils/functions.ts:63-77` and `utils/transformDs.ts:63`
+</Accordion>
+
+<Accordion title="Product selection fails or selects wrong product">
+  **Symptom:** Wrong product selected or timeout waiting for product.
+  
+  **Cause:** Product code doesn't exist, or autocomplete timing issues.
+  
+  **Solution:**
+  
+  The scraper uses slow sequential typing to trigger Angular autocomplete:
+  
+  ```typescript
+  await input.pressSequentially(codigo, { delay: 150 });
+  ```
+  
+  And exact text matching:
+  
+  ```typescript
+  await page.locator('.siigo-ac-table tr', {
+    has: page.locator(`div:text-is("${codigo}")`)
+  }).first().click();
+  ```
+  
+  Verify:
+  
+  1. Product codes match exactly (case-sensitive)
+  2. Products exist in the selected company
+  3. Bodega (warehouse) is available for product
+  
+  **Related Code:** See `utils/functions.ts:91-126` and `utils/transformDs.ts:40`
+</Accordion>
+
+<Accordion title="Error: Input field not clearing between products">
+  **Symptom:** Second product entry fails or previous value remains.
+  
+  **Cause:** Angular form not resetting after adding item.
+  
+  **Solution:**
+  
+  The scraper includes explicit wait for input reset:
+  
+  ```typescript
+  // Wait for input to clear after clicking "Agregar"
+  await expect(inputCantidad)
+    .toHaveValue('', { timeout: 10000 })
+    .catch(() => {
+      console.log('El input no se limpió automáticamente, forzando espera...');
+    });
+  
+  await page.waitForTimeout(1000); // Additional safety wait
+  ```
+  
+  This ensures each product starts with a clean form state.
+  
+  **Related Code:** See `utils/functions.ts:232-242`
+</Accordion>
+
+---
+
+## API and Data Issues
+
+<Accordion title="Error: Failed to fetch compra data">
+  **Symptom:** `/scrapping` endpoint returns error, no data fetched.
+  
+  **Cause:** PHP API endpoints unreachable or invalid compra ID.
+  
+  **Solution:**
+  
+  Test each endpoint manually:
+  
+  ```bash
+  # Test compra endpoint
+  curl -X POST https://corprecam.codesolutions.com.co/administrativo/get_compra.php \
+    -H "Content-Type: application/json" \
+    -d '{"com_codigo":"123"}'
+  
+  # Test compra items
+  curl -X POST https://corprecam.codesolutions.com.co/administrativo/get_compra_items.php \
+    -H "Content-Type: application/json" \
+    -d '{"compra":"123"}'
+  ```
+  
+  Check CORS configuration if calling from browser.
+  
+  **Related Code:** See `api/php.ts:8-76` and `server.ts:21-36`
+</Accordion>
+
+<Accordion title="No products to process (arrays empty)">
+  **Symptom:** Script completes immediately without creating document.
+  
+  **Cause:** Products filtered by company resulted in empty arrays.
+  
+  **Solution:**
+  
+  The data transformation splits products by company:
+  
+  ```typescript
+  // empresa === 1 -> Corprecam
+  // empresa === 2 -> Reciclemos
+  const [corprecam, reciclemos] = productos.reduce(
+    (acc, pro) => {
+      if (pro.empresa === 1) {
+        acc[0].push(pro);
+      } else {
+        acc[1].push(pro);
+      }
+      return acc;
+    },
+    [[], []]
+  );
+  ```
+  
+  Verify:
+  
+  1. Materials have correct `emp_id_fk` in database
+  2. At least one product belongs to company 1 or 2
+  3. Material codes exist in Siigo
+  
+  **Related Code:** See `utils/transformDs.ts:50-60` and `main.ts:16-27`
+</Accordion>
+
+---
+
+## Browser and Performance Issues
+
+<Accordion title="Firefox fails to launch">
+  **Symptom:** Error when starting browser.
+  
+  **Solution:**
+  
+  Install Playwright browsers:
+  
+  ```bash
+  npx playwright install firefox
+  npx playwright install-deps firefox
+  ```
+  
+  **Related Code:** See `utils/functions.ts:4`
+</Accordion>
+
+<Accordion title="Script is too slow">
+  **Symptom:** Each document takes several minutes.
+  
+  **Causes:**
+  
+  1. Running with `headless: false` (visual mode is slower)
+  2. Network latency to Siigo servers
+  3. Retry logic being triggered frequently
+  
+  **Solutions:**
+  
+  1. Use headless mode in production:
+  
+  ```typescript
+  const browser = await firefox.launch({ headless: true });
+  ```
+  
+  2. Monitor retry logs - frequent retries indicate stability issues
+  3. Optimize network/infrastructure
+  
+  **Note:** The delay in `pressSequentially` is intentional to work with Angular:
+  
+  ```typescript
+  await input.pressSequentially(codigo, { delay: 150 }); // Required for autocomplete
+  ```
+</Accordion>
+
+---
+
+## Getting More Help
+
+If your issue isn't covered here:
+
+1. Check the [Debugging Guide](/troubleshooting/debugging) for investigation techniques
+2. Review server logs for specific error messages
+3. Run with `headless: false` to visually inspect failures
+4. Check [Playwright documentation](https://playwright.dev/) for selector strategies
+
+<Tip>
+  Most issues can be diagnosed by watching the browser automation with `headless: false`.
+</Tip>

@@ -1,0 +1,478 @@
+---
+title: Browser Automation with Playwright
+description: Deep dive into Playwright automation strategies, locators, and best practices for Siigo integration
+---
+
+## Overview
+
+The Siigo Corprecam Scraper uses **Playwright** for robust browser automation. This page covers the technical implementation details, locator strategies, and Angular-specific handling techniques.
+
+## Playwright Configuration
+
+### Browser Setup
+
+The scraper uses Firefox instead of Chromium for better Angular application compatibility:
+
+```typescript
+import { firefox, type Page, type Browser, expect } from "@playwright/test";
+
+async function launchBrowser() {
+  const browser = await firefox.launch({ headless: false });
+  const page = await browser.newPage({
+    viewport: { width: 1024, height: 768 },
+  });
+
+  return { browser, page };
+}
+```
+
+**Configuration Rationale:**
+
+| Option | Value | Reason |
+|--------|-------|--------|
+| Browser | `firefox` | Better Angular/SPA compatibility |
+| Headless | `false` | Visual debugging, Angular rendering issues |
+| Viewport | 1024x768 | Standard desktop resolution for form rendering |
+
+<Warning>
+  Running in **non-headless** mode requires a display server (X11, Xvfb, or similar) in production environments. Consider using Xvfb for headless servers.
+</Warning>
+
+## Locator Strategies
+
+Playwright locators are the core of reliable automation. The scraper uses various strategies depending on element characteristics.
+
+### ID-Based Locators
+
+Most reliable for stable elements with unique IDs:
+
+```typescript
+// Login form elements
+const usernameInput = page.locator("#siigoSignInName");
+const passwordInput = page.locator("#siigoPassword");
+
+// Autocomplete inputs
+const productInput = page.locator(
+  "#trEditRow #editProduct #autocomplete_autocompleteInput"
+);
+
+const warehouseInput = page.locator(
+  "#trEditRow #editProductWarehouse #autocomplete_autocompleteInput"
+);
+
+const paymentDropdown = page.locator("#editingAcAccount_autocompleteInput");
+```
+
+**Best Practice:** Always prefer ID selectors when available. They're fast and resilient to UI changes.
+
+### Role-Based Locators
+
+Accessibility-friendly selectors for buttons and interactive elements:
+
+```typescript
+await page.getByRole("button", { name: "Crear" }).waitFor();
+await page.getByRole("button", { name: "Crear" }).click();
+```
+
+**Advantages:**
+- More readable
+- Tied to semantic HTML
+- Better for accessibility testing
+
+### Attribute-Based Locators
+
+For elements with unique data attributes:
+
+```typescript
+await page.locator('a[data-value="Documento soporte"]').waitFor();
+await page.locator('a[data-value="Documento soporte"]').click();
+```
+
+### Text-Based Locators
+
+Useful for dynamic content or when IDs aren't available:
+
+```typescript
+// Partial text match
+await page
+  .locator('span:has-text("Tipo ")')
+  .locator("xpath=../..")
+  .locator("select")
+  .selectOption(documentoSoporteLabelCode);
+
+// Exact text match
+await page
+  .locator(".siigo-ac-table tr", {
+    has: page.locator(`div:text-is("${codigo}")`),
+  })
+  .first()
+  .click();
+```
+
+**Important Distinction:**
+- `has-text()` - Partial match (contains)
+- `text-is()` - Exact match (equals)
+
+<Warning>
+  Use `text-is()` for product codes to avoid selecting wrong items. A search for "100" should not match "1001" or "2100".
+</Warning>
+
+### Complex Combined Locators
+
+Chaining locators for precise targeting:
+
+```typescript
+// Find supplier input within parent container
+const proveedorInput = page
+  .locator('span:has-text("Proveedores")')
+  .locator("xpath=../..")
+  .locator('input[placeholder="Buscar"]:visible')
+  .first();
+
+// Select company row with "Ingresar" button
+await page
+  .locator("tr", { hasText: nit_empresa })
+  .locator("button", { hasText: "Ingresar" })
+  .click();
+```
+
+### Form Control Locators
+
+Angular form controls require specific targeting:
+
+```typescript
+// Quantity input
+const inputCantidad = page.locator(
+  'siigo-inputdecimal[formcontrolname="editQuantity"] input.dx-texteditor-input'
+);
+
+// Unit value input
+const inputValor = page.locator(
+  'siigo-inputdecimal[formcontrolname="editUnitValue"] input.dx-texteditor-input'
+);
+```
+
+**Pattern:** Target Angular custom components by `formcontrolname`, then drill down to the actual `<input>` element.
+
+## Angular-Specific Handling
+
+### Slow Input for Reactivity
+
+Angular's change detection requires realistic typing speed:
+
+```typescript
+// ❌ WRONG - Too fast for Angular
+await input.fill(codigo);
+
+// ✅ CORRECT - Simulates human typing
+await input.pressSequentially(codigo, { delay: 150 });
+```
+
+**Why:** Angular uses `(keyup)` or `(input)` event listeners. Fast filling bypasses these events, causing autocomplete to fail.
+
+### Wait Strategies
+
+Multiple wait strategies ensure Angular has rendered:
+
+```typescript
+// Wait for page navigation
+await page.goto("https://siigonube.siigo.com/#/login");
+await page.waitForLoadState("domcontentloaded", { timeout: 60000 });
+
+// Wait for element to appear
+await page.locator(".suggestions tr").first().waitFor();
+
+// Wait for specific state
+await inputCantidad.waitFor({ state: "visible" });
+
+// Wait for value change (important for loops)
+await expect(inputCantidad).toHaveValue("", { timeout: 10000 });
+
+// Safety timeout (last resort)
+await page.waitForTimeout(1000);
+```
+
+<Warning>
+  Avoid `waitForTimeout()` unless absolutely necessary. Always prefer event-based waits (`waitFor()`, `waitForLoadState()`) for more reliable automation.
+</Warning>
+
+### Autocomplete Interaction Pattern
+
+Standardized pattern for all autocomplete fields:
+
+<Steps>
+  <Step title="Click to focus">
+    ```typescript
+    await input.click();
+    ```
+  </Step>
+  
+  <Step title="Clear previous value">
+    ```typescript
+    await input.clear();
+    ```
+  </Step>
+  
+  <Step title="Type slowly">
+    ```typescript
+    await input.pressSequentially(searchTerm, { delay: 150 });
+    ```
+  </Step>
+  
+  <Step title="Wait for suggestions">
+    ```typescript
+    await page.locator(".siigo-ac-table tr").first().waitFor();
+    ```
+  </Step>
+  
+  <Step title="Select exact match">
+    ```typescript
+    await page
+      .locator(".siigo-ac-table tr", {
+        has: page.locator(`div:text-is("${searchTerm}")`),
+      })
+      .first()
+      .click();
+    ```
+  </Step>
+</Steps>
+
+## Dynamic Row Management
+
+The `prepararNuevaFila()` function ensures a new product line is ready:
+
+```typescript
+export async function prepararNuevaFila(page: Page) {
+  await retryUntilSuccess(
+    async () => {
+      const inputBusqueda = page.locator(
+        "#trEditRow #editProduct #autocomplete_autocompleteInput"
+      );
+      const botonAgregar = page.locator("#new-item, #new-item-text").first();
+
+      // Step 1: Check if input is already visible and enabled
+      if (await inputBusqueda.isVisible()) {
+        if (await inputBusqueda.isEnabled()) {
+          return; // Ready, do nothing
+        }
+      }
+
+      // Step 2: Input is hidden, need to open new row
+      console.log(
+        "Input oculto o no listo. Forzando apertura de nueva fila..."
+      );
+
+      if (await botonAgregar.isVisible()) {
+        await botonAgregar.click({ force: true });
+      }
+
+      // Step 3: Wait for input to appear
+      try {
+        await inputBusqueda.waitFor({ state: "visible", timeout: 10000 });
+      } catch (e) {
+        // Retry click if first attempt failed
+        console.log("Reintentando clic en agregar ítem...");
+        await botonAgregar.click({ force: true });
+        await inputBusqueda.waitFor({ state: "visible", timeout: 10000 });
+      }
+    },
+    { label: "preparar nueva fila" }
+  );
+}
+```
+
+**Logic Flow:**
+1. Check if input already exists (from previous operation)
+2. If hidden, click "Agregar" button to open new row
+3. Wait for input to become visible
+4. Retry click if first attempt fails
+
+## Form Filling Best Practices
+
+### Input Clearing
+
+Always clear inputs before filling to prevent concatenation:
+
+```typescript
+await input.click();
+await input.clear(); // Essential for autocomplete fields
+await input.pressSequentially(value, { delay: 150 });
+```
+
+### Force Clicking
+
+Use `force: true` when elements are covered by overlays:
+
+```typescript
+await botonAgregar.click({ force: true });
+```
+
+**Use Cases:**
+- Modals or overlays are transitioning
+- Angular hasn't fully rendered
+- Element is technically visible but not interactive
+
+<Warning>
+  Only use `force: true` when necessary. Overuse can mask real UI issues and create brittle automation.
+</Warning>
+
+### State Verification
+
+Verify state changes before proceeding:
+
+```typescript
+// After adding product, wait for input to clear
+await expect(inputCantidad)
+  .toHaveValue("", { timeout: 10000 })
+  .catch(() => {
+    console.log("El input no se limpió automáticamente, forzando espera...");
+  });
+
+// Safety fallback
+await page.waitForTimeout(1000);
+```
+
+## Selector Maintenance
+
+### Selector Patterns Used
+
+| Pattern | Example | Use Case |
+|---------|---------|----------|
+| ID | `#siigoSignInName` | Stable form elements |
+| Class | `.siigo-ac-table` | Autocomplete suggestions |
+| Attribute | `[formcontrolname="editQuantity"]` | Angular forms |
+| Role | `getByRole("button", { name: "Crear" })` | Semantic elements |
+| Text | `hasText: nit_empresa` | Dynamic content |
+| XPath | `xpath=../..` | Parent navigation |
+| Combo | `tr:has(div:has-text("..."))` | Complex filters |
+
+### Fallback Selectors
+
+Use `.or()` for elements with inconsistent selectors:
+
+```typescript
+const botonAgregar = page
+  .locator("#new-item")
+  .or(page.getByText("Agregar otro ítem"))
+  .first();
+```
+
+## Error Handling
+
+All critical operations are wrapped in retry logic:
+
+```typescript
+await retryUntilSuccess(
+  async () => {
+    // Operation code
+  },
+  { label: "operation name" }
+);
+```
+
+See [Retry Logic](/automation/retry-logic) for detailed information.
+
+## Debugging Techniques
+
+### Visual Debugging
+
+Non-headless mode allows visual inspection:
+
+```typescript
+// Browser stays visible
+const browser = await firefox.launch({ headless: false });
+```
+
+### Console Logging
+
+Strategic logging for flow tracking:
+
+```typescript
+console.log("Input oculto o no listo. Forzando apertura de nueva fila...");
+console.log("Reintentando clic en agregar ítem...");
+```
+
+### Screenshot Capture
+
+Add screenshots on error (optional enhancement):
+
+```typescript
+try {
+  await operation();
+} catch (error) {
+  await page.screenshot({ path: `error-${Date.now()}.png` });
+  throw error;
+}
+```
+
+## Performance Considerations
+
+### Timeouts
+
+Balanced timeout values:
+
+```typescript
+// Page navigation - generous timeout
+await page.waitForLoadState("domcontentloaded", { timeout: 60000 });
+
+// Element appearance - moderate timeout
+await element.waitFor({ timeout: 10000 });
+
+// State verification - moderate timeout
+await expect(input).toHaveValue("", { timeout: 10000 });
+```
+
+### Minimize Waits
+
+Prefer event-based waits over fixed timeouts:
+
+```typescript
+// ✅ GOOD - Event-based
+await element.waitFor({ state: "visible" });
+
+// ❌ BAD - Arbitrary delay
+await page.waitForTimeout(5000);
+```
+
+## Common Pitfalls
+
+<Warning>
+  **Pitfall 1: Typing Too Fast**
+  
+  Angular won't detect input. Always use `pressSequentially()` with delay.
+</Warning>
+
+<Warning>
+  **Pitfall 2: Not Waiting for Suggestions**
+  
+  Clicking before suggestions load causes "element not found" errors.
+</Warning>
+
+<Warning>
+  **Pitfall 3: Partial Text Matching**
+  
+  Product code "100" matches "1001". Use `text-is()` for exact matches.
+</Warning>
+
+<Warning>
+  **Pitfall 4: Not Clearing Inputs**
+  
+  Previous values concatenate with new input. Always clear first.
+</Warning>
+
+<Warning>
+  **Pitfall 5: Missing State Verification**
+  
+  Not waiting for input to clear after "Agregar" causes loop issues.
+</Warning>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Siigo Integration" icon="building" href="/automation/siigo-integration">
+    High-level automation workflow and functions
+  </Card>
+  <Card title="Retry Logic" icon="rotate-right" href="/automation/retry-logic">
+    Resilient error handling mechanism
+  </Card>
+</CardGroup>

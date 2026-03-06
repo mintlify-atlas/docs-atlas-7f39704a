@@ -1,0 +1,216 @@
+---
+title: Installation
+description: Complete installation guide for Siigo Corprecam Scraper
+---
+
+## Prerequisites
+
+Before installing the Siigo Corprecam Scraper, ensure you have the following installed on your system:
+
+- **Node.js** 18.x or higher
+- **npm** or **pnpm** package manager
+- **MySQL** 5.7 or higher (for database connectivity)
+- **Git** (for cloning the repository)
+
+<Note>
+This application uses TypeScript and requires Node.js with ESM module support.
+</Note>
+
+## Clone the Repository
+
+First, clone the project repository to your local machine:
+
+```bash
+git clone <repository-url>
+cd playwright-corprecam
+```
+
+## Install Dependencies
+
+Install all required Node.js packages using your preferred package manager:
+
+<CodeGroup>
+
+```bash npm
+npm install
+```
+
+```bash pnpm
+pnpm install
+```
+
+```bash yarn
+yarn install
+```
+
+</CodeGroup>
+
+This will install the following key dependencies:
+
+- **express** (v5.1.0) - Web server framework
+- **@playwright/test** (v1.57.0) - Browser automation
+- **mysql2** (v3.15.3) - MySQL database client
+- **@ngrok/ngrok** (v1.6.0) - Secure tunnel for webhooks
+- **dotenv** (v17.2.3) - Environment variable management
+- **cors** (v2.8.5) - Cross-origin resource sharing
+- **typescript** (v5.9.3) - TypeScript compiler
+
+## Install Playwright Browsers
+
+Playwright requires browser binaries to be installed separately. Run the following command to install Chromium, Firefox, and WebKit:
+
+<CodeGroup>
+
+```bash npm
+npx playwright install
+```
+
+```bash pnpm
+pnpm exec playwright install
+```
+
+```bash yarn
+yarn playwright install
+```
+
+</CodeGroup>
+
+<Tip>
+If you only need Chromium (which is typically used for web scraping), you can install just that browser:
+
+```bash
+npx playwright install chromium
+```
+</Tip>
+
+### System Dependencies (Linux)
+
+On Linux systems, you may need to install additional system dependencies for Playwright:
+
+```bash
+npx playwright install-deps
+```
+
+<Warning>
+On headless Linux servers, ensure you have the necessary graphics libraries installed. The `playwright install-deps` command will handle this automatically.
+</Warning>
+
+## MySQL Database Setup
+
+The application requires a MySQL database connection. Follow these steps:
+
+### 1. Create a Database
+
+Connect to your MySQL server and create a database (if required by your setup):
+
+```sql
+CREATE DATABASE corprecam_db;
+```
+
+### 2. Create a Database User
+
+Create a dedicated user for the application:
+
+```sql
+CREATE USER 'corprecam_user'@'localhost' IDENTIFIED BY 'your_secure_password';
+GRANT ALL PRIVILEGES ON corprecam_db.* TO 'corprecam_user'@'localhost';
+FLUSH PRIVILEGES;
+```
+
+<Note>
+Replace `corprecam_db`, `corprecam_user`, and `your_secure_password` with your actual database name, username, and password.
+</Note>
+
+## Ngrok Setup
+
+The application uses ngrok to expose the local server to the internet for webhook callbacks.
+
+### 1. Create an Ngrok Account
+
+Sign up for a free account at [ngrok.com](https://ngrok.com)
+
+### 2. Get Your Auth Token
+
+1. Log in to your ngrok dashboard
+2. Navigate to "Your Authtoken" section
+3. Copy your authtoken
+
+<Tip>
+The free tier of ngrok is sufficient for development and testing purposes.
+</Tip>
+
+## Environment Configuration
+
+Create a `.env` file in the project root directory. See the [Configuration](/configuration) page for detailed information about all required environment variables.
+
+Basic `.env` template:
+
+```bash
+# Server Configuration
+PORT=3000
+
+# Ngrok Configuration
+NGROK_AUTHTOKEN=your_ngrok_authtoken_here
+
+# Siigo Corprecam Credentials
+USER_SIIGO_CORPRECAM=your_username
+PASSWORD_SIIGO_CORPRECAM=your_password
+
+# Database Configuration
+DB_HOST=localhost
+DB_USER=corprecam_user
+DB_PASSWORD=your_db_password
+DB_DATABASE=corprecam_db
+DB_PORT=3306
+```
+
+## Verify Installation
+
+To verify that everything is installed correctly, you can run:
+
+```bash
+node --version  # Should be 18.x or higher
+npx playwright --version  # Should show Playwright version
+```
+
+<Warning>
+Do not commit your `.env` file to version control. It contains sensitive credentials.
+</Warning>
+
+## Next Steps
+
+Once installation is complete, proceed to:
+
+1. [Configuration](/configuration) - Configure all environment variables
+2. [Running the Application](/running) - Start the application in development or production mode
+
+## Troubleshooting
+
+### Playwright Installation Issues
+
+If Playwright fails to install browsers:
+
+```bash
+# Clear Playwright cache and reinstall
+rm -rf ~/.cache/ms-playwright
+npx playwright install --force
+```
+
+### MySQL Connection Issues
+
+If you encounter MySQL connection errors:
+
+1. Verify MySQL is running: `sudo systemctl status mysql`
+2. Check your database credentials in `.env`
+3. Ensure the database user has proper permissions
+4. Check if MySQL is listening on the correct port: `netstat -tlnp | grep 3306`
+
+### Module Resolution Issues
+
+If you see module resolution errors:
+
+```bash
+# Clear node_modules and reinstall
+rm -rf node_modules package-lock.json
+npm install
+```

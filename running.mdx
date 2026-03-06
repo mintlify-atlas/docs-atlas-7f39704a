@@ -1,0 +1,423 @@
+---
+title: Running the Application
+description: Learn how to run the Siigo Corprecam Scraper in development and production
+---
+
+## Overview
+
+The Siigo Corprecam Scraper is a Node.js application that runs an Express server with Playwright automation. This guide covers how to start the application in both development and production environments.
+
+## Prerequisites
+
+Before running the application, ensure you have completed:
+
+1. [Installation](/installation) - All dependencies and tools installed
+2. [Configuration](/configuration) - Environment variables properly configured in `.env`
+
+## Development Mode
+
+Development mode uses Node.js's built-in watch mode for automatic restarts on file changes.
+
+### Start Development Server
+
+Run the development script defined in package.json (package.json:6):
+
+<CodeGroup>
+
+```bash npm
+npm run dev
+```
+
+```bash pnpm
+pnpm dev
+```
+
+```bash yarn
+yarn dev
+```
+
+</CodeGroup>
+
+This executes the following command:
+
+```bash
+node --watch server.ts
+```
+
+<Tip>
+The `--watch` flag automatically restarts the server whenever TypeScript files are modified, providing a smooth development experience.
+</Tip>
+
+### Expected Console Output
+
+When the server starts successfully, you should see:
+
+```
+Server running on port 3000
+```
+
+The application will also:
+1. Initialize an ngrok tunnel on port 3000 (server.ts:46-49)
+2. Register the tunnel URL with the remote API (server.ts:51)
+
+<Note>
+The ngrok tunnel URL changes each time you restart the application unless you have a paid ngrok plan with reserved domains.
+</Note>
+
+## Production Mode
+
+For production deployments, run the server directly without watch mode.
+
+### Start Production Server
+
+```bash
+node server.ts
+```
+
+<Warning>
+Ensure your production `.env` file contains production-ready credentials and database connection details.
+</Warning>
+
+### Using Process Managers
+
+For production environments, use a process manager to ensure the application stays running and restarts on crashes.
+
+#### PM2 (Recommended)
+
+Install PM2 globally:
+
+```bash
+npm install -g pm2
+```
+
+Start the application:
+
+```bash
+pm2 start server.ts --name corprecam-scraper --interpreter node
+```
+
+Useful PM2 commands:
+
+```bash
+# View application status
+pm2 status
+
+# View logs
+pm2 logs corprecam-scraper
+
+# Restart application
+pm2 restart corprecam-scraper
+
+# Stop application
+pm2 stop corprecam-scraper
+
+# Remove from PM2
+pm2 delete corprecam-scraper
+
+# Save PM2 configuration
+pm2 save
+
+# Setup PM2 to start on system boot
+pm2 startup
+```
+
+<Tip>
+Use `pm2 monit` for a real-time monitoring dashboard.
+</Tip>
+
+#### Using systemd (Linux)
+
+Create a systemd service file `/etc/systemd/system/corprecam-scraper.service`:
+
+```ini
+[Unit]
+Description=Siigo Corprecam Scraper
+After=network.target mysql.service
+
+[Service]
+Type=simple
+User=your-username
+WorkingDirectory=/path/to/playwright-corprecam
+Environment="NODE_ENV=production"
+ExecStart=/usr/bin/node server.ts
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Enable and start the service:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable corprecam-scraper
+sudo systemctl start corprecam-scraper
+
+# Check status
+sudo systemctl status corprecam-scraper
+
+# View logs
+sudo journalctl -u corprecam-scraper -f
+```
+
+## Application Startup Process
+
+When the application starts, it follows this sequence:
+
+### 1. Load Configuration (config.ts:1-16)
+
+```typescript
+import dotenv from "dotenv";
+dotenv.config();
+```
+
+Environment variables are loaded from `.env` file.
+
+### 2. Initialize Express Server (server.ts:7)
+
+```typescript
+const app = express();
+app.use(cors());
+app.use(express.json());
+```
+
+- Creates Express application
+- Enables CORS for cross-origin requests (server.ts:17)
+- Configures JSON body parsing (server.ts:19)
+
+### 3. Register API Endpoints
+
+The application registers a POST endpoint for scraping operations (server.ts:21-41):
+
+```typescript
+app.post("/scrapping", async (req, res) => {
+  // Scraping logic
+});
+```
+
+### 4. Start HTTP Server (server.ts:43-52)
+
+```typescript
+app.listen(config.PORT, async () => {
+  console.log(`Server running on port ${config.PORT}`);
+  
+  const listener = await ngrok.forward({
+    addr: 3000,
+    authtoken: config.NGROK_AUTHTOKEN,
+  });
+  
+  await setNgrok(listener.url());
+});
+```
+
+The server:
+- Listens on the configured PORT (default: 3000)
+- Creates an ngrok tunnel pointing to port 3000
+- Registers the public ngrok URL with the remote API
+
+<Note>
+The ngrok tunnel allows the remote Corprecam system to send webhook requests to your local server.
+</Note>
+
+## API Endpoints
+
+Once running, the application exposes the following endpoint:
+
+### POST /scrapping
+
+**Purpose**: Triggers the Playwright automation to create support documents in Siigo
+
+**Request Body**:
+
+```json
+{
+  "compra": "COM12345"
+}
+```
+
+**Processing Flow** (server.ts:21-41):
+
+1. Fetches purchase data via `getCompras()` (server.ts:24)
+2. Retrieves purchase items via `getCompraItems()` (server.ts:26)
+3. Fetches material details via `getMateriales()` (server.ts:30)
+4. Gets microroute information via `getMicro()` (server.ts:32)
+5. Transforms data into document support format (server.ts:34)
+6. Executes Playwright automation via `run_playwright()` (server.ts:36)
+
+**Response**:
+
+```json
+{
+  "message": "ok"
+}
+```
+
+<Warning>
+This endpoint triggers browser automation which can take several seconds to complete. Consider implementing timeout handling in production.
+</Warning>
+
+## Testing the Application
+
+Once the server is running, you can test it using curl or any HTTP client:
+
+```bash
+curl -X POST http://localhost:3000/scrapping \
+  -H "Content-Type: application/json" \
+  -d '{"compra": "COM12345"}'
+```
+
+You should receive:
+
+```json
+{"message":"ok"}
+```
+
+<Tip>
+Use tools like Postman, Insomnia, or HTTPie for interactive API testing during development.
+</Tip>
+
+## Monitoring and Logs
+
+### Console Logs
+
+The application outputs logs to stdout:
+
+- Server startup: `Server running on port 3000`
+- Document processing logs from `run_playwright()` (main.ts:13-14)
+
+### Viewing Logs
+
+**Development:**
+```bash
+# Logs appear in your terminal
+npm run dev
+```
+
+**PM2:**
+```bash
+pm2 logs corprecam-scraper
+pm2 logs corprecam-scraper --lines 100
+```
+
+**systemd:**
+```bash
+sudo journalctl -u corprecam-scraper -f
+sudo journalctl -u corprecam-scraper --since "1 hour ago"
+```
+
+## Troubleshooting
+
+### Server Won't Start
+
+**Issue**: Port already in use
+
+```
+Error: listen EADDRINUSE: address already in use :::3000
+```
+
+**Solution**: 
+```bash
+# Find process using port 3000
+lsof -i :3000
+# Kill the process
+kill -9 <PID>
+# Or change PORT in .env
+PORT=3001
+```
+
+### Ngrok Connection Fails
+
+**Issue**: Invalid authtoken or tunnel limit exceeded
+
+**Solution**:
+1. Verify `NGROK_AUTHTOKEN` in `.env`
+2. Check ngrok dashboard for active tunnels
+3. Free tier allows only 1 tunnel at a time
+4. Ensure you're not running multiple instances
+
+### Playwright Automation Errors
+
+**Issue**: Browser crashes or timeouts
+
+**Solution**:
+1. Check Siigo credentials in `.env`
+2. Ensure Playwright browsers are installed: `npx playwright install`
+3. On Linux, install system dependencies: `npx playwright install-deps`
+4. Check if the Siigo website structure has changed
+
+### Database Connection Errors
+
+**Issue**: Cannot connect to MySQL
+
+**Solution**:
+1. Verify MySQL is running: `sudo systemctl status mysql`
+2. Test credentials: `mysql -h $DB_HOST -u $DB_USER -p`
+3. Check firewall rules if connecting to remote MySQL
+4. Verify `DB_PORT` is correct (default: 3306)
+
+### Module Resolution Errors
+
+**Issue**: Cannot find module or import errors
+
+**Solution**:
+```bash
+# Reinstall dependencies
+rm -rf node_modules package-lock.json
+npm install
+
+# Ensure TypeScript files use .ts extensions in imports
+# The project uses ESM modules (package.json:9)
+```
+
+## Performance Considerations
+
+### Concurrent Requests
+
+The `/scrapping` endpoint executes Playwright automation sequentially. For high-volume scenarios:
+
+- Consider implementing a job queue (Bull, BullMQ)
+- Add request rate limiting
+- Monitor memory usage (Playwright can be memory-intensive)
+
+### Resource Limits
+
+**Memory**: Playwright browsers can consume 200-500MB per instance
+
+**CPU**: Browser automation is CPU-intensive
+
+**Recommended Production Specs**:
+- 2+ CPU cores
+- 4GB+ RAM
+- SSD storage for faster browser operations
+
+## Stopping the Application
+
+**Development**:
+```bash
+# Press Ctrl+C in the terminal
+```
+
+**PM2**:
+```bash
+pm2 stop corprecam-scraper
+```
+
+**systemd**:
+```bash
+sudo systemctl stop corprecam-scraper
+```
+
+## Next Steps
+
+Now that you can run the application:
+
+1. Review the source code to understand the scraping logic
+2. Customize the automation scripts for your specific needs
+3. Set up monitoring and alerting for production deployments
+4. Configure backups for your MySQL database
+5. Implement logging to a file or external service
+
+<Tip>
+For production deployments, consider implementing health check endpoints and integrating with monitoring tools like Datadog, New Relic, or Prometheus.
+</Tip>

@@ -1,0 +1,458 @@
+---
+title: Siigo Integration
+description: Complete guide to browser automation for Siigo web platform integration
+---
+
+## Overview
+
+The Siigo Corprecam Scraper automates the creation of **Documento Soporte** (support documents) in the Siigo web platform using headless browser automation. This integration handles the complete workflow from login to document submission, including supplier selection, product entry, and payment configuration.
+
+## Architecture
+
+The automation system is built with:
+
+- **Playwright** - Browser automation framework
+- **Firefox** - Browser engine (non-headless for visibility)
+- **Retry mechanism** - Resilient error handling
+- **TypeScript** - Type-safe automation scripts
+
+## Automation Workflow
+
+The complete Siigo integration follows this sequence:
+
+<Steps>
+  <Step title="Browser Launch">
+    Initialize Firefox browser with custom viewport configuration
+  </Step>
+  
+  <Step title="Login & Authentication">
+    Navigate to Siigo, authenticate user, and select company (NIT)
+  </Step>
+  
+  <Step title="Document Creation">
+    Create new "Documento Soporte" and configure document type
+  </Step>
+  
+  <Step title="Supplier Selection">
+    Search and select the supplier by NIT
+  </Step>
+  
+  <Step title="Product Entry Loop">
+    For each product:
+    - Prepare new line item
+    - Select product by code
+    - Select warehouse (bodega)
+    - Fill quantity and unit value
+  </Step>
+  
+  <Step title="Payment Configuration">
+    Select payment account and finalize document
+  </Step>
+</Steps>
+
+## Core Functions
+
+### Browser Launch
+
+The `launchBrowser()` function initializes the automation environment:
+
+```typescript
+async function launchBrowser() {
+  const browser = await firefox.launch({ headless: false });
+  const page = await browser.newPage({
+    viewport: { width: 1024, height: 768 },
+  });
+
+  return { browser, page };
+}
+```
+
+**Configuration Details:**
+- **Browser**: Firefox (better Angular compatibility)
+- **Headless**: `false` (visible browser for debugging)
+- **Viewport**: 1024x768 (standard desktop resolution)
+
+<Warning>
+  The browser runs in **non-headless** mode to ensure proper Angular rendering and allow visual debugging. This requires a display server in production environments.
+</Warning>
+
+### Login Function
+
+The `login()` function handles authentication and document initialization:
+
+```typescript
+async function login(
+  page: Page,
+  username: string,
+  password: string,
+  documentoSoporteLabelCode: string,
+  nit: string,
+  nit_empresa: string
+)
+```
+
+**Parameters:**
+- `page` - Playwright page instance
+- `username` - Siigo username
+- `password` - Siigo password
+- `documentoSoporteLabelCode` - Document type code (e.g., "25470")
+- `nit` - Supplier NIT for search
+- `nit_empresa` - Company NIT to select ("900142913" or "901328575")
+
+<Steps>
+  <Step title="Navigate to Login">
+    ```typescript
+    await page.goto("https://siigonube.siigo.com/#/login");
+    await page.waitForLoadState("domcontentloaded", { timeout: 60000 });
+    ```
+  </Step>
+  
+  <Step title="Fill Credentials">
+    ```typescript
+    const usernameInput = page.locator("#siigoSignInName");
+    const passwordInput = page.locator("#siigoPassword");
+
+    await usernameInput.fill(username);
+    await passwordInput.fill(password);
+
+    await page.click('button[type="button"]');
+    ```
+  </Step>
+  
+  <Step title="Select Company">
+    ```typescript
+    await page
+      .locator("tr", { hasText: nit_empresa })
+      .locator("button", { hasText: "Ingresar" })
+      .waitFor();
+
+    await page
+      .locator("tr", { hasText: nit_empresa })
+      .locator("button", { hasText: "Ingresar" })
+      .click();
+    ```
+  </Step>
+  
+  <Step title="Create Documento Soporte">
+    ```typescript
+    await page.getByRole("button", { name: "Crear" }).waitFor();
+    await page.getByRole("button", { name: "Crear" }).click();
+
+    await page.locator('a[data-value="Documento soporte"]').waitFor();
+    await page.locator('a[data-value="Documento soporte"]').click();
+    ```
+  </Step>
+  
+  <Step title="Select Document Type (Conditional)">
+    ```typescript
+    if (nit_empresa === "900142913") {
+      await page
+        .locator('span:has-text("Tipo ")')
+        .locator("xpath=../..")
+        .locator("select")
+        .selectOption(documentoSoporteLabelCode);
+    }
+    ```
+  </Step>
+  
+  <Step title="Search and Select Supplier">
+    ```typescript
+    const proveedorInput = page
+      .locator('span:has-text("Proveedores")')
+      .locator("xpath=../..")
+      .locator('input[placeholder="Buscar"]:visible')
+      .first();
+
+    await proveedorInput.click();
+    await page.locator(".suggestions tr").first().waitFor();
+
+    await proveedorInput.pressSequentially(nit);
+
+    await page.locator(".suggestions tr", { hasText: nit }).first().waitFor();
+    await page.locator(".suggestions tr", { hasText: nit }).first().click();
+    ```
+  </Step>
+  
+  <Step title="Auto-fill Document Number">
+    ```typescript
+    // Read automatically generated document number
+    const rawText = await page.locator("#lblAutomaticNumber").innerText();
+    const numero = rawText.split(" ")[0];
+
+    await page.fill('input[placeholder="Consecutivo"]', numero);
+    ```
+  </Step>
+</Steps>
+
+### Product Selection
+
+The `selectProducto()` function searches and selects products by code:
+
+```typescript
+async function selectProducto(page: Page, codigo: string)
+```
+
+**Implementation:**
+
+```typescript
+const input = page.locator(
+  "#trEditRow #editProduct #autocomplete_autocompleteInput"
+);
+
+await input.click();
+await input.clear(); // Clear any previous input
+
+// Type slowly for Angular to detect keystrokes
+await input.pressSequentially(codigo, { delay: 150 });
+
+// Wait for suggestions
+await page.locator(".siigo-ac-table tr").first().waitFor();
+
+// Select exact match
+await page
+  .locator(".siigo-ac-table tr", {
+    has: page.locator(`div:text-is("${codigo}")`),
+  })
+  .first()
+  .click();
+```
+
+**Key Techniques:**
+- `pressSequentially()` with 150ms delay for Angular reactivity
+- `text-is()` for exact code matching (avoids partial matches)
+- `clear()` before input to prevent stale data
+
+### Warehouse Selection
+
+The `selectBodega()` function selects the warehouse (bodega):
+
+```typescript
+async function selectBodega(page: Page, nombre: string)
+```
+
+**Implementation:**
+
+```typescript
+const input = page.locator(
+  "#trEditRow #editProductWarehouse #autocomplete_autocompleteInput"
+);
+
+await input.click();
+
+await page
+  .locator(".suggestions table.siigo-ac-table tr")
+  .first()
+  .waitFor();
+
+await page
+  .locator(".siigo-ac-table tr", {
+    has: page.locator(`div:text("${nombre}")`),
+  })
+  .first()
+  .click();
+```
+
+<Warning>
+  Warehouse selection is only required for the **first product** in company "900142913" (Corprecam). Subsequent products inherit the warehouse automatically.
+</Warning>
+
+### Quantity and Value Input
+
+The `llenarCantidadValor()` function fills product quantity and unit value:
+
+```typescript
+async function llenarCantidadValor(
+  page: Page,
+  cantidad: number,
+  valor: number
+)
+```
+
+**Implementation:**
+
+```typescript
+// 1. Define the inputs
+const inputCantidad = page.locator(
+  'siigo-inputdecimal[formcontrolname="editQuantity"] input.dx-texteditor-input'
+);
+const inputValor = page.locator(
+  'siigo-inputdecimal[formcontrolname="editUnitValue"] input.dx-texteditor-input'
+);
+
+// 2. Wait for quantity input and fill
+await inputCantidad.waitFor({ state: "visible" });
+await inputCantidad.fill(cantidad.toString());
+
+// 3. Fill value
+await inputValor.fill(valor.toString());
+
+// 4. Click "Agregar otro ítem" button
+const botonAgregar = page
+  .locator("#new-item")
+  .or(page.getByText("Agregar otro ítem"))
+  .first();
+
+await botonAgregar.waitFor({ state: "visible" });
+await botonAgregar.click({ force: true });
+
+// 5. Wait for input to clear (confirms row was added)
+await expect(inputCantidad)
+  .toHaveValue("", { timeout: 10000 })
+  .catch(() => {
+    console.log("El input no se limpió automáticamente, forzando espera...");
+  });
+
+// Safety wait for DOM to stabilize
+await page.waitForTimeout(1000);
+```
+
+**Critical Synchronization:**
+The function waits for the quantity input to clear (`toHaveValue("")`) after clicking "Agregar". This ensures Siigo has processed the line before the next iteration.
+
+### Payment Account Selection
+
+The `seleccionarPago()` function selects the payment account and closes the page:
+
+```typescript
+async function seleccionarPago(page: Page, cuentaNombre: string)
+```
+
+**Implementation:**
+
+```typescript
+const dropdownAcc = page.locator("#editingAcAccount_autocompleteInput");
+
+await dropdownAcc.waitFor({ timeout: 10000 });
+await dropdownAcc.click();
+
+await page.locator(".suggestions .siigo-ac-table").first().waitFor();
+
+await page
+  .locator(
+    `.suggestions .siigo-ac-table tr:has(div:has-text("${cuentaNombre}"))`
+  )
+  .click();
+
+// Close the page after payment selection
+await page.close();
+```
+
+**Payment Accounts:**
+- **Corprecam (900142913)**: " CAJA RIOHACHA "
+- **Reciclemos (901328575)**: " Efectivo "
+
+<Warning>
+  Account names include leading/trailing spaces in Siigo. The exact string format must match for successful selection.
+</Warning>
+
+## Main Execution Flow
+
+The `playwright_corprecam_reciclemos()` function orchestrates the complete automation:
+
+```typescript
+export async function playwright_corprecam_reciclemos(
+  documentoSoporte: Products[],
+  documentoSoporteLabelCode: string,
+  bodegaRiohacha: string,
+  cuentaContable: string,
+  proveedor_id: string,
+  USER: string,
+  PASSWORD: string,
+  nit_empresa: string
+) {
+  const { page } = await launchBrowser();
+
+  if (documentoSoporte.length > 0) {
+    await login(
+      page,
+      USER,
+      PASSWORD,
+      documentoSoporteLabelCode,
+      proveedor_id,
+      nit_empresa
+    );
+
+    for (let i = 0; i < documentoSoporte.length; i++) {
+      await prepararNuevaFila(page);
+
+      await selectProducto(page, documentoSoporte[i].codigo);
+
+      if (i === 0 && nit_empresa === "900142913") {
+        await selectBodega(page, bodegaRiohacha);
+      }
+
+      await llenarCantidadValor(
+        page,
+        documentoSoporte[i].cantidad,
+        documentoSoporte[i].precio
+      );
+    }
+
+    await seleccionarPago(page, cuentaContable);
+  }
+}
+```
+
+## Company-Specific Behavior
+
+### Corprecam (NIT: 900142913)
+- Requires document type selection
+- Requires warehouse selection on first product
+- Uses "CAJA RIOHACHA" payment account
+
+### Reciclemos (NIT: 901328575)
+- No document type selection
+- No explicit warehouse selection
+- Uses "Efectivo" payment account
+
+## Entry Point
+
+The automation is triggered from `main.ts`:
+
+```typescript
+export async function run_playwright(documentoSoporte: DocumentoSoporte) {
+  if (documentoSoporte.corprecam.length > 0) {
+    await playwright_corprecam_reciclemos(
+      documentoSoporte.corprecam,
+      "25470", // documentoSoporteLabelCode
+      " BODEGA DE RIOHACHA ",
+      " CAJA RIOHACHA ",
+      documentoSoporte.proveedor_id,
+      config.USER_SIIGO_CORPRECAM,
+      config.PASSWORD_SIIGO_CORPRECAM,
+      "900142913"
+    );
+  }
+
+  if (documentoSoporte.reciclemos.length > 0) {
+    await playwright_corprecam_reciclemos(
+      documentoSoporte.reciclemos,
+      "25470",
+      " BODEGA DE RIOHACHA ",
+      " Efectivo ",
+      documentoSoporte.proveedor_id,
+      config.USER_SIIGO_CORPRECAM,
+      config.PASSWORD_SIIGO_CORPRECAM,
+      "901328575"
+    );
+  }
+}
+```
+
+## Configuration
+
+Credentials are loaded from environment variables via `config.ts`:
+
+- `USER_SIIGO_CORPRECAM` - Siigo username
+- `PASSWORD_SIIGO_CORPRECAM` - Siigo password
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Browser Automation" icon="browser" href="/automation/browser-automation">
+    Learn Playwright locator strategies and best practices
+  </Card>
+  <Card title="Retry Logic" icon="rotate-right" href="/automation/retry-logic">
+    Understand the resilient retry mechanism
+  </Card>
+</CardGroup>

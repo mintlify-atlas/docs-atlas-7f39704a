@@ -1,0 +1,695 @@
+---
+title: 'Debugging Guide'
+description: 'Learn how to debug and diagnose issues in the Siigo Corprecam Scraper'
+---
+
+## Overview
+
+This guide covers debugging techniques, tools, and strategies to diagnose issues with the scraper automation.
+
+---
+
+## Visual Debugging
+
+### Running with Headless Mode Disabled
+
+The most effective way to debug Playwright automation is to watch it in action.
+
+**Enable Visual Mode:**
+
+1. Open `utils/functions.ts`
+2. Modify the `launchBrowser()` function:
+
+```typescript utils/functions.ts
+async function launchBrowser() {
+  const browser = await firefox.launch({ 
+    headless: false,  // Set to false to see the browser
+    slowMo: 500       // Optional: Slow down actions by 500ms
+  });
+  const page = await browser.newPage({
+    viewport: { width: 1024, height: 768 },
+  });
+
+  return { browser, page };
+}
+```
+
+**Related Code:** `utils/functions.ts:3-10`
+
+<Tip>
+  The `slowMo` option slows down each action, making it easier to follow what's happening.
+</Tip>
+
+### What to Watch For
+
+When running with `headless: false`, observe:
+
+1. **Login Process**
+   - Does username/password fill correctly?
+   - Is the correct company selected?
+   - Are there captchas or security prompts?
+
+2. **Form Interactions**
+   - Do inputs focus properly?
+   - Does autocomplete trigger?
+   - Are dropdowns opening?
+
+3. **Timing Issues**
+   - Do elements appear before being clicked?
+   - Are animations causing delays?
+   - Is content loading slowly?
+
+4. **Errors on Page**
+   - Check browser console (F12)
+   - Look for Siigo error messages
+   - Note any JavaScript errors
+
+---
+
+## Understanding the Retry Mechanism
+
+The scraper uses a custom retry system to handle transient failures.
+
+### How It Works
+
+```typescript utils/retryUntilSucces.ts
+export async function retryUntilSuccess<T>(
+  action: () => Promise<T>,
+  {
+    retries = 5,        // Default: Try 5 times
+    delayMs = 1000,     // Default: Wait 1 second between attempts
+    label = "acción",   // Description for logging
+  }
+): Promise<T> {
+  let lastError: any;
+
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      return await action();
+    } catch (error) {
+      lastError = error;
+      console.log(
+        `⚠️ Falló ${label} (intento ${attempt}/${retries}). Reintentando...`
+      );
+      if (attempt < retries) {
+        await new Promise((r) => setTimeout(r, delayMs));
+      }
+    }
+  }
+
+  console.error(`❌ ${label} falló tras ${retries} intentos`);
+  throw lastError;
+}
+```
+
+**Related Code:** `utils/retryUntilSucces.ts:1-31`
+
+### When Retries Help
+
+<Accordion title="Network Latency">
+  **Scenario:** Siigo servers respond slowly.
+  
+  **How Retries Help:** Multiple attempts give the network time to respond.
+  
+  **Example Log:**
+  ```
+  ⚠️ Falló login a Siigo (intento 1/5). Reintentando...
+  ⚠️ Falló login a Siigo (intento 2/5). Reintentando...
+  ✓ Login successful
+  ```
+</Accordion>
+
+<Accordion title="Timing/Race Conditions">
+  **Scenario:** Element appears after click but before waitFor.
+  
+  **How Retries Help:** Second attempt finds element that loaded late.
+  
+  **Affected Operations:**
+  - Product autocomplete: `utils/functions.ts:91-126`
+  - Warehouse selection: `utils/functions.ts:128-151`
+  - Form field filling: `utils/functions.ts:194-246`
+</Accordion>
+
+<Accordion title="Angular Digest Cycles">
+  **Scenario:** Angular hasn't updated DOM after user input.
+  
+  **How Retries Help:** Gives Angular time to process and re-render.
+  
+  **Why It Matters:** Siigo uses Angular, which batches DOM updates.
+</Accordion>
+
+### When Retries Don't Help
+
+<Warning>
+  Retries **will not fix**:
+  - Wrong credentials
+  - Missing environment variables
+  - Non-existent products or providers
+  - Siigo UI changes (selector updates needed)
+</Warning>
+
+If you see **all 5 retries failing**, it's not a timing issue—investigate the root cause.
+
+---
+
+## Debugging Specific Components
+
+### Login Issues
+
+**Location:** `utils/functions.ts:12-89`
+
+**Add Debug Logging:**
+
+```typescript utils/functions.ts
+async function login(
+  page: Page,
+  username: string,
+  password: string,
+  documentoSoporteLabelCode: string,
+  nit: string,
+  nit_empresa: string
+) {
+  await retryUntilSuccess(
+    async () => {
+      console.log('🔍 DEBUG: Starting login...');
+      console.log('Username:', username);
+      console.log('NIT Empresa:', nit_empresa);
+      console.log('Proveedor NIT:', nit);
+
+      await page.goto('https://siigonube.siigo.com/#/login');
+      console.log('🔍 DEBUG: Navigated to login page');
+      
+      await page.waitForLoadState('domcontentloaded', { timeout: 60000 });
+      console.log('🔍 DEBUG: Page loaded');
+
+      const usernameInput = page.locator('#siigoSignInName');
+      const passwordInput = page.locator('#siigoPassword');
+
+      await usernameInput.fill(username);
+      console.log('🔍 DEBUG: Username filled');
+      
+      await passwordInput.fill(password);
+      console.log('🔍 DEBUG: Password filled');
+
+      await page.click('button[type="button"]');
+      console.log('🔍 DEBUG: Clicked login button');
+
+      // ... rest of function
+    },
+    { label: 'login a Siigo' }
+  );
+}
+```
+
+**Check Points:**
+- Are credentials being read from config?
+- Does the login button selector still work?
+- Is the company selection finding the right NIT?
+
+### Product Selection Issues
+
+**Location:** `utils/functions.ts:91-126`
+
+**Debug Autocomplete:**
+
+```typescript utils/functions.ts
+async function selectProducto(page: Page, codigo: string) {
+  await retryUntilSuccess(
+    async () => {
+      console.log('🔍 DEBUG: Selecting product:', codigo);
+      
+      const input = page.locator(
+        '#trEditRow #editProduct #autocomplete_autocompleteInput'
+      );
+
+      const isVisible = await input.isVisible();
+      console.log('🔍 DEBUG: Input visible?', isVisible);
+
+      await input.click();
+      await input.clear();
+
+      console.log('🔍 DEBUG: Typing product code...');
+      await input.pressSequentially(codigo, { delay: 150 });
+
+      console.log('🔍 DEBUG: Waiting for suggestions...');
+      await page.locator('.siigo-ac-table tr').first().waitFor();
+
+      const suggestions = await page.locator('.siigo-ac-table tr').count();
+      console.log('🔍 DEBUG: Found', suggestions, 'suggestions');
+
+      await page
+        .locator('.siigo-ac-table tr', {
+          has: page.locator(`div:text-is("${codigo}")`),
+        })
+        .first()
+        .click();
+      
+      console.log('🔍 DEBUG: Product selected');
+    },
+    { label: 'selección de producto' }
+  );
+}
+```
+
+**Common Issues:**
+- Input not visible → Check `prepararNuevaFila()` execution
+- No suggestions → Product doesn't exist or wrong company
+- Wrong suggestion selected → Code doesn't match exactly
+
+### Form Filling Issues
+
+**Location:** `utils/functions.ts:194-246`
+
+**Debug Quantity/Price Input:**
+
+```typescript utils/functions.ts
+async function llenarCantidadValor(
+  page: Page,
+  cantidad: number,
+  valor: number
+) {
+  await retryUntilSuccess(
+    async () => {
+      console.log('🔍 DEBUG: Filling quantity:', cantidad, 'value:', valor);
+      
+      const inputCantidad = page.locator(
+        'siigo-inputdecimal[formcontrolname="editQuantity"] input.dx-texteditor-input'
+      );
+      const inputValor = page.locator(
+        'siigo-inputdecimal[formcontrolname="editUnitValue"] input.dx-texteditor-input'
+      );
+
+      await inputCantidad.waitFor({ state: 'visible' });
+      console.log('🔍 DEBUG: Cantidad input visible');
+      
+      await inputCantidad.fill(cantidad.toString());
+      console.log('🔍 DEBUG: Cantidad filled');
+
+      await inputValor.fill(valor.toString());
+      console.log('🔍 DEBUG: Valor filled');
+
+      const botonAgregar = page
+        .locator('#new-item')
+        .or(page.getByText('Agregar otro ítem'))
+        .first();
+
+      await botonAgregar.waitFor({ state: 'visible' });
+      await botonAgregar.click({ force: true });
+      console.log('🔍 DEBUG: Clicked add button');
+
+      // Wait for form reset
+      await expect(inputCantidad)
+        .toHaveValue('', { timeout: 10000 })
+        .catch(() => {
+          console.log('⚠️ DEBUG: Input did not clear automatically');
+        });
+      
+      console.log('🔍 DEBUG: Form reset complete');
+      await page.waitForTimeout(1000);
+    },
+    { label: 'llenar cantidad y valor' }
+  );
+}
+```
+
+---
+
+## Using Playwright Inspector
+
+Playwright includes a powerful debugging tool.
+
+### Launch with Inspector
+
+```bash
+PWDEBUG=1 npm run dev
+```
+
+This opens the Playwright Inspector, allowing you to:
+- Step through actions one at a time
+- Inspect element selectors
+- View console logs in real-time
+- Record and export test scripts
+
+### Pause Execution
+
+Add breakpoints in your code:
+
+```typescript
+await page.pause(); // Inspector will pause here
+```
+
+Useful locations:
+- Before login: Debug credential issues
+- Before product selection: Verify form state
+- After errors: Inspect page state
+
+<Tip>
+  Learn more at [Playwright Debugging Docs](https://playwright.dev/docs/debug)
+</Tip>
+
+---
+
+## Analyzing Logs
+
+### Retry Pattern Recognition
+
+**Healthy Logs (Occasional Retries):**
+```
+⚠️ Falló selección de producto (intento 1/5). Reintentando...
+✓ Product selected successfully
+⚠️ Falló llenar cantidad y valor (intento 1/5). Reintentando...
+✓ Quantity and value filled
+```
+
+**Unhealthy Logs (Consistent Failures):**
+```
+⚠️ Falló login a Siigo (intento 1/5). Reintentando...
+⚠️ Falló login a Siigo (intento 2/5). Reintentando...
+⚠️ Falló login a Siigo (intento 3/5). Reintentando...
+⚠️ Falló login a Siigo (intento 4/5). Reintentando...
+⚠️ Falló login a Siigo (intento 5/5). Reintentando...
+❌ login a Siigo falló tras 5 intentos
+```
+
+<Warning>
+  If **every operation** requires multiple retries, there's a systemic issue (network, selectors, etc.)
+</Warning>
+
+### Network Request Monitoring
+
+Log API calls:
+
+```typescript server.ts
+app.post('/scrapping', async (req, res) => {
+  console.log('📥 Received scrapping request:', req.body);
+  
+  const body = req.body;
+  
+  console.log('🔍 Fetching compra:', body.compra);
+  const compra = await getCompras(body.compra);
+  console.log('✓ Compra fetched:', compra);
+  
+  console.log('🔍 Fetching compra items');
+  const compraItems = await getCompraItems(body.compra);
+  console.log('✓ Items fetched:', compraItems.length);
+  
+  const citem_material = compraItems.map((row) => row.citem_material);
+  
+  console.log('🔍 Fetching materials:', citem_material);
+  const materiales = await getMateriales(citem_material);
+  console.log('✓ Materials fetched:', materiales.length);
+  
+  console.log('🔍 Fetching micro ruta:', compra[0].com_micro_ruta);
+  const micro = await getMicro(Number(compra[0].com_micro_ruta));
+  console.log('✓ Micro fetched:', micro);
+  
+  const ds = transfromDs(compra[0], compraItems, materiales, micro);
+  console.log('🔍 Transformed data:', JSON.stringify(ds, null, 2));
+  
+  await run_playwright(ds);
+  console.log('✓ Playwright execution complete');
+  
+  return res.json({ message: 'ok' });
+});
+```
+
+---
+
+## Testing Individual Components
+
+Create isolated test scripts for debugging:
+
+### Test Login Only
+
+```typescript test-login.ts
+import { launchBrowser, login } from './utils/functions.ts';
+import { config } from './config.ts';
+
+async function testLogin() {
+  const { browser, page } = await launchBrowser();
+  
+  try {
+    await login(
+      page,
+      config.USER_SIIGO_CORPRECAM,
+      config.PASSWORD_SIIGO_CORPRECAM,
+      '25470',
+      '123456789', // Test provider NIT
+      '900142913'  // Corprecam NIT
+    );
+    console.log('✓ Login test passed');
+  } catch (error) {
+    console.error('❌ Login test failed:', error);
+  } finally {
+    await browser.close();
+  }
+}
+
+testLogin();
+```
+
+Run with:
+```bash
+node --watch test-login.ts
+```
+
+### Test Product Selection
+
+```typescript test-product.ts
+import { launchBrowser, prepararNuevaFila, selectProducto } from './utils/functions.ts';
+
+async function testProductSelection() {
+  const { browser, page } = await launchBrowser();
+  
+  // Manual step: Login and navigate to document creation form first
+  console.log('⚠️ Manually login and create new document, then press Enter...');
+  await new Promise(resolve => process.stdin.once('data', resolve));
+  
+  try {
+    await prepararNuevaFila(page);
+    console.log('✓ Nueva fila prepared');
+    
+    await selectProducto(page, 'PROD-001'); // Your test product code
+    console.log('✓ Product selected');
+  } catch (error) {
+    console.error('❌ Product selection failed:', error);
+  }
+  
+  // Don't close - keep open for inspection
+  console.log('Browser kept open for inspection. Press Ctrl+C to exit.');
+}
+
+testProductSelection();
+```
+
+---
+
+## Debugging Environment Issues
+
+### Verify Configuration
+
+```typescript check-config.ts
+import { config } from './config.ts';
+
+console.log('Configuration Check:');
+console.log('====================');
+console.log('PORT:', config.PORT);
+console.log('NGROK_AUTHTOKEN:', config.NGROK_AUTHTOKEN ? '✓ Set' : '❌ Missing');
+console.log('USER_SIIGO_CORPRECAM:', config.USER_SIIGO_CORPRECAM ? '✓ Set' : '❌ Missing');
+console.log('PASSWORD_SIIGO_CORPRECAM:', config.PASSWORD_SIIGO_CORPRECAM ? '✓ Set (hidden)' : '❌ Missing');
+console.log('DB_HOST:', config.DB_HOST || '❌ Missing');
+console.log('DB_USER:', config.DB_USER || '❌ Missing');
+console.log('DB_PASSWORD:', config.DB_PASSWORD ? '✓ Set' : '❌ Missing');
+console.log('DB_DATABASE:', config.DB_DATABASE || '❌ Missing');
+console.log('DB_PORT:', config.DB_PORT || '❌ Missing');
+```
+
+**Related Code:** `config.ts:1-16`
+
+### Test Database Connection
+
+```typescript test-db.ts
+import mysql from 'mysql2/promise';
+import { config } from './config.ts';
+
+async function testDatabase() {
+  try {
+    const connection = await mysql.createConnection({
+      host: config.DB_HOST,
+      user: config.DB_USER,
+      password: config.DB_PASSWORD,
+      database: config.DB_DATABASE,
+      port: config.DB_PORT,
+    });
+    
+    console.log('✓ Database connection successful');
+    
+    const [rows] = await connection.execute('SELECT 1 as test');
+    console.log('✓ Query execution successful:', rows);
+    
+    await connection.end();
+  } catch (error) {
+    console.error('❌ Database connection failed:', error);
+  }
+}
+
+testDatabase();
+```
+
+---
+
+## Common Debugging Patterns
+
+### Pattern 1: Selector Not Working
+
+```typescript
+// Bad: Generic selector
+await page.locator('button').click();
+
+// Good: Specific selector with context
+await page.locator('#specific-id').click();
+
+// Better: With role and text
+await page.getByRole('button', { name: 'Submit' }).click();
+
+// Best: With parent context
+await page.locator('#form').locator('button[type="submit"]').click();
+```
+
+### Pattern 2: Timing Issues
+
+```typescript
+// Bad: No waiting
+await page.click('#button');
+await page.fill('#input', 'value'); // May fail if input not ready
+
+// Good: Explicit waiting
+await page.click('#button');
+await page.locator('#input').waitFor({ state: 'visible' });
+await page.fill('#input', 'value');
+
+// Better: Combined with retry
+await retryUntilSuccess(
+  async () => {
+    await page.click('#button');
+    await page.locator('#input').waitFor({ state: 'visible' });
+    await page.fill('#input', 'value');
+  },
+  { label: 'form interaction' }
+);
+```
+
+### Pattern 3: Data Validation
+
+```typescript
+// Always validate data before processing
+const ds = transfromDs(compra[0], compraItems, materiales, micro);
+
+if (ds.corprecam.length === 0 && ds.reciclemos.length === 0) {
+  console.error('❌ No products to process!');
+  console.error('Compra:', compra);
+  console.error('Items:', compraItems);
+  console.error('Materials:', materiales);
+  throw new Error('No products available for selected companies');
+}
+
+console.log(`Processing ${ds.corprecam.length} Corprecam + ${ds.reciclemos.length} Reciclemos products`);
+```
+
+---
+
+## Advanced Debugging Tools
+
+### Screenshots on Failure
+
+Capture page state when errors occur:
+
+```typescript utils/retryUntilSucces.ts
+export async function retryUntilSuccess<T>(
+  action: () => Promise<T>,
+  {
+    retries = 5,
+    delayMs = 1000,
+    label = "acción",
+    page, // Add page parameter
+  }: {
+    retries?: number;
+    delayMs?: number;
+    label?: string;
+    page?: Page; // Optional page for screenshots
+  } = {}
+): Promise<T> {
+  let lastError: any;
+
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      return await action();
+    } catch (error) {
+      lastError = error;
+      console.log(
+        `⚠️ Falló ${label} (intento ${attempt}/${retries}). Reintentando...`
+      );
+      
+      // Take screenshot on failure
+      if (page && attempt === retries) {
+        const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+        const filename = `error-${label.replace(/\s/g, '-')}-${timestamp}.png`;
+        await page.screenshot({ path: filename, fullPage: true });
+        console.log(`📸 Screenshot saved: ${filename}`);
+      }
+      
+      if (attempt < retries) {
+        await new Promise((r) => setTimeout(r, delayMs));
+      }
+    }
+  }
+
+  console.error(`❌ ${label} falló tras ${retries} intentos`);
+  throw lastError;
+}
+```
+
+### Video Recording
+
+Record full sessions:
+
+```typescript utils/functions.ts
+async function launchBrowser() {
+  const browser = await firefox.launch({ headless: false });
+  const context = await browser.newContext({
+    viewport: { width: 1024, height: 768 },
+    recordVideo: {
+      dir: './videos',
+      size: { width: 1024, height: 768 }
+    }
+  });
+  const page = await context.newPage();
+
+  return { browser, page, context };
+}
+
+// Don't forget to close context to save video
+await context.close();
+```
+
+---
+
+## Next Steps
+
+After debugging:
+
+1. Document your findings
+2. Update selectors if Siigo UI changed
+3. Adjust retry settings if needed
+4. Add defensive checks for edge cases
+5. Consider adding automated tests
+
+<Tip>
+  Most production issues can be prevented by running tests with `headless: false` in a staging environment first.
+</Tip>
+
+## Related Resources
+
+- [Common Issues](/troubleshooting/common-issues) - Quick solutions to frequent problems
+- [Playwright Debugging](https://playwright.dev/docs/debug) - Official Playwright debugging guide
+- [Playwright Selectors](https://playwright.dev/docs/selectors) - Selector strategies and best practices

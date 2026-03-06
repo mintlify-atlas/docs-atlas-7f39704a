@@ -1,0 +1,689 @@
+---
+title: Data Flow
+description: How data moves through the system from external sources to Siigo Nube
+---
+
+## Data Flow Diagram
+
+The system processes data through a unidirectional pipeline:
+
+```
+External Client
+     ↓
+  [POST /scrapping]
+     ↓
+Express Server (server.ts)
+     ↓
+  ┌─────────────────────────────────┐
+  │  Corprecam PHP Backend APIs     │
+  │  - get_compra.php               │
+  │  - get_compra_items.php         │
+  │  - get_materiales.php           │
+  │  - get_microruta.php            │
+  └─────────────────────────────────┘
+     ↓
+Data Transformation (transfromDs)
+     ↓
+  DocumentoSoporte Object
+     ├─→ corprecam: Products[]
+     └─→ reciclemos: Products[]
+     ↓
+Playwright Orchestrator (main.ts)
+     ├─→ [If corprecam.length > 0]
+     │       ↓
+     │   Siigo Session (NIT: 900142913)
+     │       ↓
+     │   Browser Automation
+     │
+     └─→ [If reciclemos.length > 0]
+             ↓
+         Siigo Session (NIT: 901328575)
+             ↓
+         Browser Automation
+     ↓
+Siigo Nube (Draft Documents)
+     ↓
+HTTP Response {"message": "ok"}
+```
+
+## Data Structures
+
+### Input: HTTP Request
+
+**Endpoint**: `POST /scrapping`
+
+**Request Body**:
+```typescript
+{
+  compra: string;  // Purchase order ID (e.g., "12345")
+}
+```
+
+**Example**:
+```json
+{
+  "compra": "67890"
+}
+```
+
+**Source**: Typically triggered by the Corprecam web application when a user wants to sync a purchase order to Siigo.
+
+### Stage 1: Database Records
+
+Data retrieved from Corprecam MySQL database via PHP APIs:
+
+#### Compra (Purchase Order Header)
+
+**Type**: `types/types.ts:3-7`
+
+```typescript
+interface Compra {
+  com_codigo: number;        // Purchase order number
+  comp_asociado: string;     // Supplier NIT/ID
+  com_micro_ruta: string;    // Micro-route code reference
+}
+```
+
+**API**: `api/php.ts:8-23`
+
+**Example**:
+```json
+{
+  "com_codigo": 67890,
+  "comp_asociado": "123456789",
+  "com_micro_ruta": "5"
+}
+```
+
+#### CompraItem (Line Items)
+
+**Type**: `types/types.ts:13-21`
+
+```typescript
+interface CompraItem {
+  citem_codigo: number;          // Line item ID
+  citem_id_compra: number;       // FK to purchase order
+  citem_material: number;        // FK to material
+  citem_cantidad: number;        // Quantity purchased
+  citem_valor_unitario: number;  // Unit price
+  citem_total: number;           // Line total
+  citem_rechazo: number;         // Rejection quantity
+}
+```
+
+**API**: `api/php.ts:25-42`
+
+**Example**:
+```json
+[
+  {
+    "citem_codigo": 1,
+    "citem_id_compra": 67890,
+    "citem_material": 42,
+    "citem_cantidad": 100,
+    "citem_valor_unitario": 50,
+    "citem_total": 5000,
+    "citem_rechazo": 0
+  },
+  {
+    "citem_codigo": 2,
+    "citem_id_compra": 67890,
+    "citem_material": 83,
+    "citem_cantidad": 50,
+    "citem_valor_unitario": 120,
+    "citem_total": 6000,
+    "citem_rechazo": 0
+  }
+]
+```
+
+#### Material (Product Details)
+
+**Type**: `types/types.ts:23-28`
+
+```typescript
+interface Material {
+  mat_id: number;        // Material ID
+  mat_codigo: string;    // Siigo product code
+  mat_nom: string;       // Product name
+  emp_id_fk: number;     // Company ID (1=Corprecam, 2=Reciclemos)
+}
+```
+
+**API**: `api/php.ts:44-59`
+
+**Example**:
+```json
+[
+  {
+    "mat_id": 42,
+    "mat_codigo": "PLAST-001",
+    "mat_nom": "Plastico PET",
+    "emp_id_fk": 1
+  },
+  {
+    "mat_id": 83,
+    "mat_codigo": "CARTON-002",
+    "mat_nom": "Carton Corrugado",
+    "emp_id_fk": 2
+  }
+]
+```
+
+**Critical Field**: `emp_id_fk` determines which company (Corprecam or Reciclemos) the product belongs to.
+
+#### Micro (Route Information)
+
+**Type**: `types/types.ts:29-31`
+
+```typescript
+interface Micro {
+  mic_nom: string;  // Route name/description
+}
+```
+
+**API**: `api/php.ts:61-76`
+
+**Example**:
+```json
+{
+  "mic_nom": "Ruta Centro"
+}
+```
+
+### Stage 2: Intermediate Products
+
+After joining `CompraItem` with `Material`, the system creates intermediate product records:
+
+**Code**: `utils/transformDs.ts:35-45`
+
+```typescript
+interface Products {
+  codigo: string;     // mat_codigo from Material
+  cantidad: number;   // citem_cantidad from CompraItem
+  precio: number;     // citem_valor_unitario from CompraItem
+  empresa: number | undefined;  // emp_id_fk from Material
+}
+```
+
+**Example** (continuing from above):
+```typescript
+[
+  {
+    codigo: "PLAST-001",
+    cantidad: 100,
+    precio: 50,
+    empresa: 1  // Corprecam
+  },
+  {
+    codigo: "CARTON-002",
+    cantidad: 50,
+    precio: 120,
+    empresa: 2  // Reciclemos
+  }
+]
+```
+
+### Stage 3: DocumentoSoporte (Final Structure)
+
+The transformed data structure passed to Playwright:
+
+**Type**: `types/types.ts:39-44`
+
+```typescript
+interface DocumentoSoporte {
+  proveedor_id: string;     // Supplier NIT
+  micro_id: string;         // Route name
+  corprecam: Products[];    // Products for company 1
+  reciclemos: Products[];   // Products for company 2
+}
+```
+
+**Transformation Code**: `utils/transformDs.ts:50-67`
+
+```typescript
+const [corprecam, reciclemos] = productos.reduce(
+  (acc: [Array<Products>, Array<Products>], pro: Products) => {
+    if (pro.empresa === 1) {
+      acc[0].push(pro);  // Corprecam array
+    } else {
+      acc[1].push(pro);  // Reciclemos array
+    }
+    return acc;
+  },
+  [[], []]  // Initial: two empty arrays
+);
+```
+
+**Example** (final output):
+```json
+{
+  "proveedor_id": "123456789",
+  "micro_id": "Ruta Centro",
+  "corprecam": [
+    {
+      "codigo": "PLAST-001",
+      "cantidad": 100,
+      "precio": 50
+    }
+  ],
+  "reciclemos": [
+    {
+      "codigo": "CARTON-002",
+      "cantidad": 50,
+      "precio": 120
+    }
+  ]
+}
+```
+
+## Data Flow by Component
+
+### server.ts Data Flow
+
+**Input**: HTTP POST body with `compra` ID
+
+**Processing**:
+```typescript
+// Line 24: Fetch header
+const compra = await getCompras(body.compra);
+
+// Line 26: Fetch items
+const compraItems = await getCompraItems(body.compra);
+
+// Line 28: Extract material IDs
+const citem_material = compraItems.map((row) => row.citem_material);
+
+// Line 30: Fetch materials in batch
+const materiales = await getMateriales(citem_material);
+
+// Line 32: Fetch route info
+const micro = await getMicro(Number(compra[0].com_micro_ruta));
+
+// Line 34: Transform to DocumentoSoporte
+const ds = transfromDs(compra[0], compraItems, materiales, micro);
+```
+
+**Output**: `ds` object passed to `run_playwright()`
+
+### main.ts Data Flow
+
+**Input**: `DocumentoSoporte` object
+
+**Processing**:
+```typescript
+// Line 16-27: Process Corprecam products if present
+if (documentoSoporte.corprecam.length > 0) {
+  await playwright_corprecam_reciclemos(
+    documentoSoporte.corprecam,          // Products array
+    "25470",                             // Document type
+    " BODEGA DE RIOHACHA ",              // Warehouse
+    " CAJA RIOHACHA ",                   // Account
+    documentoSoporte.proveedor_id,       // Supplier
+    config.USER_SIIGO_CORPRECAM,         // Credentials
+    config.PASSWORD_SIIGO_CORPRECAM,
+    "900142913"                          // Corprecam NIT
+  );
+}
+
+// Line 29-40: Process Reciclemos products if present
+if (documentoSoporte.reciclemos.length > 0) {
+  await playwright_corprecam_reciclemos(
+    documentoSoporte.reciclemos,         // Different products
+    "25470",
+    " BODEGA DE RIOHACHA ",
+    " Efectivo ",                        // Different account
+    documentoSoporte.proveedor_id,
+    config.USER_SIIGO_CORPRECAM,
+    config.PASSWORD_SIIGO_CORPRECAM,
+    "901328575"                          // Reciclemos NIT
+  );
+}
+```
+
+**Output**: Side effects only (browser automation)
+
+### transformDs.ts Data Flow
+
+**Input**: Raw database records (4 separate arrays)
+
+**Processing Steps**:
+
+1. **Join CompraItem with Material**:
+```typescript
+const productos = compraItems.map((item): Products => {
+  const material = materiales.find(
+    (material) => material.mat_id === item.citem_material
+  );
+  return {
+    codigo: material?.mat_codigo || "",
+    cantidad: item.citem_cantidad,
+    precio: item.citem_valor_unitario,
+    empresa: material?.emp_id_fk,
+  };
+});
+```
+
+2. **Partition by Company**:
+```typescript
+const [corprecam, reciclemos] = productos.reduce(
+  (acc, pro) => {
+    if (pro.empresa === 1) {
+      acc[0].push(pro);
+    } else {
+      acc[1].push(pro);
+    }
+    return acc;
+  },
+  [[], []]
+);
+```
+
+3. **Construct Final Object**:
+```typescript
+return {
+  proveedor_id: compra.comp_asociado,
+  micro_id: String(micros.mic_nom) || "",
+  corprecam: corprecam,
+  reciclemos: reciclemos,
+};
+```
+
+**Output**: `DocumentoSoporte` object
+
+### utils/functions.ts Data Flow
+
+These functions consume data and produce browser interactions:
+
+#### login()
+
+**Input Data**:
+- `username`: Siigo account username
+- `password`: Siigo account password
+- `documentoSoporteLabelCode`: "25470"
+- `nit`: Supplier NIT from `proveedor_id`
+- `nit_empresa`: Company NIT ("900142913" or "901328575")
+
+**Output**: Authenticated browser session with document form open
+
+#### selectProducto()
+
+**Input Data**:
+- `codigo`: Product code from `Products.codigo` (e.g., "PLAST-001")
+
+**Processing**:
+```typescript
+// Line 104: Type slowly to trigger autocomplete
+await input.pressSequentially(codigo, { delay: 150 });
+
+// Line 107: Wait for suggestions
+await page.locator(".siigo-ac-table tr").first().waitFor();
+
+// Line 110-115: Find exact match
+await page
+  .locator(".siigo-ac-table tr", {
+    has: page.locator(`div:text-is("${codigo}")`),
+  })
+  .first()
+  .click();
+```
+
+**Output**: Product selected in current form row
+
+#### llenarCantidadValor()
+
+**Input Data**:
+- `cantidad`: Quantity from `Products.cantidad`
+- `valor`: Unit price from `Products.precio`
+
+**Processing**:
+```typescript
+// Line 211: Fill quantity
+await inputCantidad.fill(cantidad.toString());
+
+// Line 214: Fill price
+await inputValor.fill(valor.toString());
+
+// Line 225: Submit row
+await botonAgregar.click({ force: true });
+
+// Line 233-234: Wait for DOM to reset
+await expect(inputCantidad).toHaveValue("", { timeout: 10000 });
+await page.waitForTimeout(1000);
+```
+
+**Output**: Product row saved in Siigo form
+
+#### seleccionarPago()
+
+**Input Data**:
+- `cuentaNombre`: Account name (" CAJA RIOHACHA " or " Efectivo ")
+
+**Processing**:
+```typescript
+// Line 254: Open account dropdown
+await dropdownAcc.click();
+
+// Line 256: Wait for options
+await page.locator(".suggestions .siigo-ac-table").first().waitFor();
+
+// Line 258-262: Select by text match
+await page
+  .locator(
+    `.suggestions .siigo-ac-table tr:has(div:has-text("${cuentaNombre}"))`
+  )
+  .click();
+```
+
+**Output**: Payment account selected, browser closed
+
+## Data Validation
+
+The system performs minimal validation:
+
+### Implicit Validation
+
+1. **Required Fields**: TypeScript interfaces enforce type structure
+2. **Material Lookup**: Uses `find()` which may return `undefined`
+   - Fallback: Empty string for `codigo` (`|| ""`)
+   - **Risk**: May attempt to create products with empty codes
+
+3. **Company Assignment**: Products without `emp_id_fk === 1` or `2` go to `reciclemos` array by default (the `else` branch)
+
+### Missing Validation
+
+**Not Checked**:
+- Whether `compra` array is empty
+- Whether `compraItems` has matching materials
+- Numeric ranges (quantity > 0, price > 0)
+- String formats (NIT validity, product codes)
+- Duplicate products
+
+**Consequence**: Invalid data may cause automation failures during Playwright execution.
+
+## Data Persistence
+
+The system does NOT persist data:
+
+**No Local Storage**:
+- No database writes
+- No file system writes
+- No cache or session storage
+
+**External Persistence**:
+- **Source**: Corprecam MySQL database (read-only)
+- **Destination**: Siigo Nube (write-only, via browser automation)
+
+**State Duration**: Data exists only in memory during request processing (typically 30-60 seconds).
+
+## Data Security
+
+### In Transit
+
+**API Calls**: All Corprecam APIs use HTTPS (`https://corprecam.codesolutions.com.co`)
+
+**Siigo Login**: HTTPS with credentials transmitted via form fields
+
+### In Memory
+
+**Sensitive Data**:
+- Siigo credentials stored in `config` object (loaded from `.env`)
+- Supplier NITs passed through function parameters
+- Product prices and quantities in memory during processing
+
+**Risk**: Credentials visible in browser automation (non-headless mode)
+
+### Logging
+
+Currently logs to console:
+```typescript
+// main.ts:13-14
+console.log(documentoSoporte.corprecam);
+console.log(documentoSoporte.reciclemos);
+```
+
+**Warning**: Full product details logged to stdout (may include sensitive pricing).
+
+## Data Transformation Rules
+
+### Company Assignment Logic
+
+**Rule**: Based on `Material.emp_id_fk`
+
+| `emp_id_fk` | Company | NIT | Account |
+|-------------|---------|-----|----------|
+| 1 | Corprecam | 900142913 | CAJA RIOHACHA |
+| 2 (or other) | Reciclemos | 901328575 | Efectivo |
+
+**Implementation**: `utils/transformDs.ts:50-60`
+
+### Field Mapping
+
+**From Database to Automation**:
+
+| Source | Field | Destination | Usage |
+|--------|-------|-------------|--------|
+| Compra | `comp_asociado` | `proveedor_id` | Supplier search in Siigo |
+| Micro | `mic_nom` | `micro_id` | Not used in automation (reference only) |
+| Material | `mat_codigo` | `codigo` | Product search in Siigo |
+| CompraItem | `citem_cantidad` | `cantidad` | Quantity field |
+| CompraItem | `citem_valor_unitario` | `precio` | Unit value field |
+
+### Data Loss
+
+**Fields NOT Transferred to Siigo**:
+- `com_codigo` (purchase order number)
+- `citem_total` (line total - calculated by Siigo)
+- `citem_rechazo` (rejection quantity)
+- `mat_nom` (product name - looked up by Siigo)
+- `mic_nom` (route - not used)
+
+**Justification**: Siigo stores these fields independently based on the product code.
+
+## Data Flow Error Scenarios
+
+### Missing Material
+
+If a `CompraItem` references a non-existent `mat_id`:
+
+```typescript
+const material = materiales.find(
+  (material) => material.mat_id === item.citem_material
+);
+// material = undefined
+
+return {
+  codigo: material?.mat_codigo || "",  // Empty string!
+  // ...
+};
+```
+
+**Result**: Product with empty code passed to Playwright → Automation fails when searching for empty string.
+
+### Empty Product Arrays
+
+If all products belong to one company:
+
+```typescript
+// Scenario: All products have emp_id_fk === 1
+{
+  corprecam: [/* 5 products */],
+  reciclemos: []  // Empty array
+}
+```
+
+**Handling**:
+```typescript
+// main.ts:29
+if (documentoSoporte.reciclemos.length > 0) {
+  // Skipped - no execution for empty array
+}
+```
+
+**Result**: Only Corprecam session runs, Reciclemos skipped gracefully.
+
+### API Failure
+
+If any API call fails (network error, 500 response):
+
+```typescript
+// server.ts:24
+const compra = await getCompras(body.compra);
+// Throws unhandled promise rejection
+```
+
+**Result**: 
+- Express middleware catches error
+- Returns HTTP 500 to client
+- No Playwright execution
+- No partial data in Siigo
+
+## Output Data
+
+### HTTP Response
+
+**Format**: JSON
+
+**Success**:
+```json
+{
+  "message": "ok"
+}
+```
+
+**Source**: `server.ts:38-40`
+
+**Meaning**: Playwright automation completed without throwing errors. Does NOT indicate:
+- Document was finalized in Siigo
+- All products were added successfully
+- Data accuracy
+
+### Siigo Side Effects
+
+The actual output is a **draft document** in Siigo Nube containing:
+
+1. Document type: "Documento soporte" (type 25470 for Corprecam)
+2. Supplier: Matched by NIT from `proveedor_id`
+3. Consecutive number: Auto-generated by Siigo
+4. Line items:
+   - Product code, description (from Siigo catalog)
+   - Warehouse: "BODEGA DE RIOHACHA" (Corprecam only)
+   - Quantity and unit price
+5. Payment account: "CAJA RIOHACHA" or "Efectivo"
+
+**Document State**: Draft (requires manual finalization)
+
+### ngrok Registration
+
+On startup, the system writes its public URL to Corprecam:
+
+**API**: `api/php.ts:78-89`
+
+**Request**:
+```json
+{
+  "link": "https://abc123.ngrok.io"
+}
+```
+
+**Purpose**: Allows Corprecam to dynamically discover the scraper's endpoint URL.

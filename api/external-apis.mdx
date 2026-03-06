@@ -1,0 +1,255 @@
+---
+title: 'External API Functions'
+description: 'PHP API client functions for interacting with Corprecam backend'
+---
+
+The `api/php.ts` module provides typed client functions for interacting with the Corprecam PHP backend APIs.
+
+## Base URL
+
+All API functions communicate with:
+```
+https://corprecam.codesolutions.com.co/administrativo/
+```
+
+## Functions
+
+### getCompras
+
+Fetches a purchase record by its code.
+
+```typescript
+async function getCompras(com_codigo: string): Promise<Compra[]>
+```
+
+**Parameters:**
+- `com_codigo` (string) - The purchase code identifier
+
+**Returns:**
+- `Promise<Compra[]>` - Array of purchase records
+
+**Endpoint:** `POST /get_compra.php`
+
+**Request Example:**
+```bash
+curl -X POST https://corprecam.codesolutions.com.co/administrativo/get_compra.php \
+  -H "Content-Type: application/json" \
+  -d '{
+    "com_codigo": "12345"
+  }'
+```
+
+**Request Body:**
+```json
+{
+  "com_codigo": "12345"
+}
+```
+
+**Response Example:**
+```json
+[
+  {
+    "com_codigo": 12345,
+    "comp_asociado": "900123456",
+    "com_micro_ruta": "101"
+  }
+]
+```
+
+---
+
+### getCompraItems
+
+Fetches all line items for a purchase.
+
+```typescript
+async function getCompraItems(com_codigo: string): Promise<CompraItem[]>
+```
+
+**Parameters:**
+- `com_codigo` (string) - The purchase code identifier
+
+**Returns:**
+- `Promise<CompraItem[]>` - Array of purchase item records
+
+**Endpoint:** `POST /get_compra_items.php`
+
+**Request Example:**
+```bash
+curl -X POST https://corprecam.codesolutions.com.co/administrativo/get_compra_items.php \
+  -H "Content-Type: application/json" \
+  -d '{
+    "compra": "12345"
+  }'
+```
+
+**Request Body:**
+```json
+{
+  "compra": "12345"
+}
+```
+
+**Response Example:**
+```json
+[
+  {
+    "citem_codigo": 1,
+    "citem_id_compra": 12345,
+    "citem_material": 501,
+    "citem_cantidad": 100,
+    "citem_valor_unitario": 1500,
+    "citem_total": 150000,
+    "citem_rechazo": 0
+  },
+  {
+    "citem_codigo": 2,
+    "citem_id_compra": 12345,
+    "citem_material": 502,
+    "citem_cantidad": 50,
+    "citem_valor_unitario": 2000,
+    "citem_total": 100000,
+    "citem_rechazo": 5
+  }
+]
+```
+
+---
+
+### getMateriales
+
+Fetches material details for multiple material IDs.
+
+```typescript
+async function getMateriales(ids: number[]): Promise<Material[]>
+```
+
+**Parameters:**
+- `ids` (number[]) - Array of material IDs to fetch
+
+**Returns:**
+- `Promise<Material[]>` - Array of material records
+
+**Endpoint:** `POST /get_materiales.php`
+
+**Request Example:**
+```bash
+curl -X POST https://corprecam.codesolutions.com.co/administrativo/get_materiales.php \
+  -H "Content-Type: application/json" \
+  -d '{
+    "ids": [501, 502, 503]
+  }'
+```
+
+**Request Body:**
+```json
+{
+  "ids": [501, 502, 503]
+}
+```
+
+**Response Example:**
+```json
+[
+  {
+    "mat_id": 501,
+    "mat_codigo": "MAT-001",
+    "mat_nom": "Plastic Bottles",
+    "emp_id_fk": 1
+  },
+  {
+    "mat_id": 502,
+    "mat_codigo": "MAT-002",
+    "mat_nom": "Cardboard",
+    "emp_id_fk": 1
+  }
+]
+```
+
+---
+
+### getMicro
+
+Fetches micro route information by route code.
+
+```typescript
+async function getMicro(com_micro_ruta: number): Promise<Micro>
+```
+
+**Parameters:**
+- `com_micro_ruta` (number) - The micro route code
+
+**Returns:**
+- `Promise<Micro>` - Micro route record
+
+**Endpoint:** `POST /get_microruta.php`
+
+**Request Example:**
+```bash
+curl -X POST https://corprecam.codesolutions.com.co/administrativo/get_microruta.php \
+  -H "Content-Type: application/json" \
+  -d '{
+    "codigo": 101
+  }'
+```
+
+**Request Body:**
+```json
+{
+  "codigo": 101
+}
+```
+
+**Response Example:**
+```json
+{
+  "mic_codigo": 101,
+  "mic_nom": "Ruta Norte"
+}
+```
+
+---
+
+### setNgrok
+
+Updates the ngrok tunnel URL in the Corprecam system.
+
+```typescript
+async function setNgrok(link: string | null): Promise<any>
+```
+
+**Parameters:**
+- `link` (string | null) - The ngrok tunnel URL, or null to clear
+
+**Returns:**
+- `Promise<any>` - Response from the API
+
+**Endpoint:** `POST /set_ngrok.php`
+
+**Request Example:**
+```bash
+curl -X POST https://corprecam.codesolutions.com.co/administrativo/set_ngrok.php \
+  -H "Content-Type: application/json" \
+  -d '{
+    "link": "https://abc123.ngrok.io"
+  }'
+```
+
+**Request Body:**
+```json
+{
+  "link": "https://abc123.ngrok.io"
+}
+```
+
+**Usage:**
+This function is automatically called during server startup to register the current ngrok tunnel URL with the Corprecam backend, enabling it to send webhooks to the scraper service.
+
+## Implementation Notes
+
+- All functions use `POST` method with JSON payloads
+- All functions set `Content-Type: application/json` header
+- Functions return typed promises based on TypeScript interfaces
+- The `setNgrok` function is called automatically on server startup (server.ts:51)
+- Material IDs are extracted from purchase items before calling `getMateriales()` (server.ts:28)

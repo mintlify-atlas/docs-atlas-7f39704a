@@ -1,0 +1,311 @@
+---
+title: 'Data Models'
+description: 'TypeScript interfaces and types used throughout the application'
+---
+
+All TypeScript interfaces are defined in `types/types.ts` and extend `RowDataPacket` from the `mysql2` library where applicable.
+
+## Compra
+
+Represents a purchase record from the Corprecam system.
+
+```typescript
+interface Compra extends RowDataPacket {
+  com_codigo: number;
+  comp_asociado: string;
+  com_micro_ruta: string;
+}
+```
+
+### Fields
+
+<ResponseField name="com_codigo" type="number" required>
+  Unique purchase code identifier
+</ResponseField>
+
+<ResponseField name="comp_asociado" type="string" required>
+  Associated company/partner identifier (typically a tax ID or NIT)
+</ResponseField>
+
+<ResponseField name="com_micro_ruta" type="string" required>
+  Micro route code associated with this purchase. Used to fetch route details via `getMicro()`
+</ResponseField>
+
+### Example
+
+```json
+{
+  "com_codigo": 12345,
+  "comp_asociado": "900123456",
+  "com_micro_ruta": "101"
+}
+```
+
+---
+
+## CompraItem
+
+Represents a line item within a purchase.
+
+```typescript
+interface CompraItem extends RowDataPacket {
+  citem_codigo: number;
+  citem_id_compra: number;
+  citem_material: number;
+  citem_cantidad: number;
+  citem_valor_unitario: number;
+  citem_total: number;
+  citem_rechazo: number;
+}
+```
+
+### Fields
+
+<ResponseField name="citem_codigo" type="number" required>
+  Unique purchase item identifier
+</ResponseField>
+
+<ResponseField name="citem_id_compra" type="number" required>
+  Foreign key reference to the parent purchase (com_codigo)
+</ResponseField>
+
+<ResponseField name="citem_material" type="number" required>
+  Material ID reference. Used to fetch material details via `getMateriales()`
+</ResponseField>
+
+<ResponseField name="citem_cantidad" type="number" required>
+  Quantity of material purchased
+</ResponseField>
+
+<ResponseField name="citem_valor_unitario" type="number" required>
+  Unit price of the material
+</ResponseField>
+
+<ResponseField name="citem_total" type="number" required>
+  Total line item value (cantidad × valor_unitario)
+</ResponseField>
+
+<ResponseField name="citem_rechazo" type="number" required>
+  Rejected quantity (amount not accepted)
+</ResponseField>
+
+### Example
+
+```json
+{
+  "citem_codigo": 1,
+  "citem_id_compra": 12345,
+  "citem_material": 501,
+  "citem_cantidad": 100,
+  "citem_valor_unitario": 1500,
+  "citem_total": 150000,
+  "citem_rechazo": 0
+}
+```
+
+---
+
+## Material
+
+Represents a material/product in the system.
+
+```typescript
+interface Material extends RowDataPacket {
+  mat_id: number;
+  mat_codigo: string;
+  mat_nom: string;
+  emp_id_fk: number;
+}
+```
+
+### Fields
+
+<ResponseField name="mat_id" type="number" required>
+  Unique material identifier
+</ResponseField>
+
+<ResponseField name="mat_codigo" type="string" required>
+  Material code (SKU or product code)
+</ResponseField>
+
+<ResponseField name="mat_nom" type="string" required>
+  Material name or description
+</ResponseField>
+
+<ResponseField name="emp_id_fk" type="number" required>
+  Foreign key reference to the company/enterprise
+</ResponseField>
+
+### Example
+
+```json
+{
+  "mat_id": 501,
+  "mat_codigo": "MAT-001",
+  "mat_nom": "Plastic Bottles",
+  "emp_id_fk": 1
+}
+```
+
+---
+
+## Micro
+
+Represents a micro route in the collection system.
+
+```typescript
+interface Micro extends RowDataPacket {
+  mic_codigo: number;
+  mic_nom: string;
+}
+```
+
+### Fields
+
+<ResponseField name="mic_codigo" type="number" required>
+  Unique micro route code identifier
+</ResponseField>
+
+<ResponseField name="mic_nom" type="string" required>
+  Micro route name or description
+</ResponseField>
+
+### Example
+
+```json
+{
+  "mic_codigo": 101,
+  "mic_nom": "Ruta Norte"
+}
+```
+
+<Note>
+  The Micro interface is defined twice in the source (lines 9-12 and 29-31). The complete definition includes both `mic_codigo` and `mic_nom` fields.
+</Note>
+
+---
+
+## Products
+
+Represents a product entry in a Siigo document.
+
+```typescript
+interface Products {
+  codigo: string;
+  cantidad: number;
+  precio: number;
+}
+```
+
+### Fields
+
+<ResponseField name="codigo" type="string" required>
+  Product code/SKU
+</ResponseField>
+
+<ResponseField name="cantidad" type="number" required>
+  Product quantity
+</ResponseField>
+
+<ResponseField name="precio" type="number" required>
+  Product unit price
+</ResponseField>
+
+### Example
+
+```json
+{
+  "codigo": "MAT-001",
+  "cantidad": 100,
+  "precio": 1500
+}
+```
+
+---
+
+## DocumentoSoporte
+
+Represents a support document structure used by Siigo for purchase recording. This is the final transformed structure sent to the Playwright automation.
+
+```typescript
+interface DocumentoSoporte {
+  proveedor_id: string;
+  micro_id: string;
+  corprecam: Products[];
+  reciclemos: Products[];
+}
+```
+
+### Fields
+
+<ResponseField name="proveedor_id" type="string" required>
+  Provider/supplier identifier (typically the comp_asociado from Compra)
+</ResponseField>
+
+<ResponseField name="micro_id" type="string" required>
+  Micro route identifier (from Micro.mic_nom)
+</ResponseField>
+
+<ResponseField name="corprecam" type="Products[]" required>
+  Array of products for the Corprecam company
+</ResponseField>
+
+<ResponseField name="reciclemos" type="Products[]" required>
+  Array of products for the Reciclemos company
+</ResponseField>
+
+### Example
+
+```json
+{
+  "proveedor_id": "900123456",
+  "micro_id": "Ruta Norte",
+  "corprecam": [
+    {
+      "codigo": "MAT-001",
+      "cantidad": 100,
+      "precio": 1500
+    },
+    {
+      "codigo": "MAT-002",
+      "cantidad": 50,
+      "precio": 2000
+    }
+  ],
+  "reciclemos": [
+    {
+      "codigo": "MAT-003",
+      "cantidad": 75,
+      "precio": 1800
+    }
+  ]
+}
+```
+
+### Usage
+
+This interface is used as the final payload passed to `run_playwright()` for automated data entry into the Siigo web interface. The data is transformed from the raw Corprecam data using the `transfromDs()` utility function.
+
+---
+
+## Type Hierarchy
+
+```
+RowDataPacket (from mysql2)
+├── Compra
+├── CompraItem
+├── Material
+└── Micro
+
+Standalone Types
+├── Products
+└── DocumentoSoporte
+    └── contains: Products[]
+```
+
+## Notes
+
+- All database-related interfaces extend `RowDataPacket` from `mysql2` library
+- The `DocumentoSoporte` interface is the primary data structure for Siigo integration
+- Material IDs from `CompraItem.citem_material` are used to fetch full `Material` records
+- The `com_micro_ruta` from `Compra` is converted to a number before fetching `Micro` data

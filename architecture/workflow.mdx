@@ -1,0 +1,381 @@
+---
+title: Automation Workflow
+description: Step-by-step process flow from API request to Siigo document creation
+---
+
+## Workflow Overview
+
+The automation workflow follows a linear pipeline from receiving a purchase order ID to creating completed support documents in Siigo Nube. The entire process takes approximately 30-60 seconds depending on the number of line items.
+
+## Complete Execution Flow
+
+<Steps>
+
+### Server Initialization
+
+When the application starts (`server.ts:43-52`):
+
+1. Express server binds to port 3000
+2. ngrok tunnel is established with authentication token
+3. Public ngrok URL is registered with Corprecam backend via `setNgrok()`
+4. Server becomes ready to accept `/scrapping` requests
+
+```typescript
+app.listen(config.PORT, async () => {
+  const listener = await ngrok.forward({
+    addr: 3000,
+    authtoken: config.NGROK_AUTHTOKEN,
+  });
+  
+  await setNgrok(listener.url());
+});
+```
+
+### Request Reception
+
+Client sends POST request to `/scrapping` endpoint:
+
+```json
+{
+  "compra": "12345"
+}
+```
+
+**Handler**: `server.ts:21-41`
+
+### Data Gathering Phase
+
+The server makes four parallel API calls to the Corprecam backend:
+
+**Step 3.1**: Fetch purchase order header
+```typescript
+const compra = await getCompras(body.compra);
+// Returns: { com_codigo, comp_asociado, com_micro_ruta }
+```
+
+**Step 3.2**: Fetch purchase order line items
+```typescript
+const compraItems = await getCompraItems(body.compra);
+// Returns: [{ citem_material, citem_cantidad, citem_valor_unitario }]
+```
+
+**Step 3.3**: Extract material IDs and fetch material details
+```typescript
+const citem_material = compraItems.map((row) => row.citem_material);
+const materiales = await getMateriales(citem_material);
+// Returns: [{ mat_id, mat_codigo, mat_nom, emp_id_fk }]
+```
+
+**Step 3.4**: Fetch micro-route information
+```typescript
+const micro = await getMicro(Number(compra[0].com_micro_ruta));
+// Returns: { mic_nom }
+```
+
+**API Endpoints**:
+- `https://corprecam.codesolutions.com.co/administrativo/get_compra.php`
+- `https://corprecam.codesolutions.com.co/administrativo/get_compra_items.php`
+- `https://corprecam.codesolutions.com.co/administrativo/get_materiales.php`
+- `https://corprecam.codesolutions.com.co/administrativo/get_microruta.php`
+
+### Data Transformation
+
+**Function**: `transfromDs()` in `utils/transformDs.ts:29-68`
+
+The raw database records are transformed into a structured `DocumentoSoporte` object:
+
+```typescript
+const ds = transfromDs(compra[0], compraItems, materiales, micro);
+```
+
+**Transformation Logic**:
+
+1. **Product Mapping**: Combine items with materials
+```typescript
+const productos = compraItems.map((item): Products => {
+  const material = materiales.find(
+    (material) => material.mat_id === item.citem_material
+  );
+  return {
+    codigo: material?.mat_codigo || "",
+    cantidad: item.citem_cantidad,
+    precio: item.citem_valor_unitario,
+    empresa: material?.emp_id_fk,
+  };
+});
+```
+
+2. **Company Separation**: Split by `emp_id_fk`
+```typescript
+const [corprecam, reciclemos] = productos.reduce(
+  (acc, pro) => {
+    if (pro.empresa === 1) {
+      acc[0].push(pro);  // Corprecam
+    } else {
+      acc[1].push(pro);  // Reciclemos
+    }
+    return acc;
+  },
+  [[], []]
+);
+```
+
+3. **Result Structure**:
+```typescript
+return {
+  proveedor_id: compra.comp_asociado,
+  micro_id: String(micros.mic_nom),
+  corprecam: corprecam,    // Products for company 1
+  reciclemos: reciclemos,  // Products for company 2
+};
+```
+
+### Playwright Execution Orchestration
+
+**Entry Point**: `run_playwright()` in `main.ts:12-41`
+
+The orchestrator conditionally executes automation for each company:
+
+```typescript
+if (documentoSoporte.corprecam.length > 0) {
+  await playwright_corprecam_reciclemos(
+    documentoSoporte.corprecam,
+    "25470",                              // Document type code
+    " BODEGA DE RIOHACHA ",               // Warehouse
+    " CAJA RIOHACHA ",                    // Account
+    documentoSoporte.proveedor_id,
+    config.USER_SIIGO_CORPRECAM,
+    config.PASSWORD_SIIGO_CORPRECAM,
+    "900142913"                           // Corprecam NIT
+  );
+}
+
+if (documentoSoporte.reciclemos.length > 0) {
+  await playwright_corprecam_reciclemos(
+    documentoSoporte.reciclemos,
+    "25470",
+    " BODEGA DE RIOHACHA ",
+    " Efectivo ",                         // Different account
+    documentoSoporte.proveedor_id,
+    config.USER_SIIGO_CORPRECAM,
+    config.PASSWORD_SIIGO_CORPRECAM,
+    "901328575"                           // Reciclemos NIT
+  );
+}
+```
+
+**Note**: Each company gets a separate browser session and login.
+
+### Browser Automation Workflow
+
+**Function**: `playwright_corprecam_reciclemos()` in `utils/transformDs.ts:70-110`
+
+<Steps>
+
+#### Browser Launch
+
+```typescript
+const { page } = await launchBrowser();
+// Launches Firefox in non-headless mode with 1024x768 viewport
+```
+
+**Config**: `utils/functions.ts:3-10`
+
+#### Login to Siigo
+
+**Function**: `login()` in `utils/functions.ts:12-89`
+
+Detailed authentication flow:
+
+1. Navigate to `https://siigonube.siigo.com/#/login`
+2. Fill credentials:
+   ```typescript
+   await usernameInput.fill(username);
+   await passwordInput.fill(password);
+   await page.click('button[type="button"]');
+   ```
+3. Select company by NIT:
+   ```typescript
+   await page
+     .locator("tr", { hasText: nit_empresa })  // "900142913" or "901328575"
+     .locator("button", { hasText: "Ingresar" })
+     .click();
+   ```
+4. Click "Crear" button
+5. Select "Documento soporte" option
+6. Select document type (Corprecam only: "25470")
+7. Search and select supplier by NIT:
+   ```typescript
+   await proveedorInput.pressSequentially(nit);
+   await page.locator(".suggestions tr", { hasText: nit }).first().click();
+   ```
+8. Read and fill auto-generated consecutive number
+
+#### Product Entry Loop
+
+For each product in the array (`transformDs.ts:92-106`):
+
+**Step 6.1**: Prepare new row
+```typescript
+await prepararNuevaFila(page);
+// Ensures the product search input is visible and enabled
+```
+
+**Step 6.2**: Select product by code
+```typescript
+await selectProducto(page, documentoSoporte[i].codigo);
+// Types code slowly (150ms delay) to trigger autocomplete
+// Waits for suggestions table
+// Clicks matching product row
+```
+**Location**: `utils/functions.ts:91-126`
+
+**Step 6.3**: Select warehouse (first product only, Corprecam only)
+```typescript
+if (i === 0 && nit_empresa === "900142913") {
+  await selectBodega(page, bodegaRiohacha);
+  // Selects " BODEGA DE RIOHACHA " from dropdown
+}
+```
+**Location**: `utils/functions.ts:128-151`
+
+**Step 6.4**: Fill quantity and price
+```typescript
+await llenarCantidadValor(
+  page,
+  documentoSoporte[i].cantidad,
+  documentoSoporte[i].precio
+);
+```
+
+**Detailed Steps** (`utils/functions.ts:194-246`):
+1. Wait for quantity input to be visible
+2. Fill quantity value
+3. Fill unit price value
+4. Click "Agregar otro ítem" button
+5. Wait for input to clear (confirms row was saved)
+6. Wait 1 second for DOM stabilization
+
+**Critical Timing**: The 1-second wait and input clearing check prevent race conditions when adding the next product.
+
+#### Payment Account Selection
+
+**Function**: `seleccionarPago()` in `utils/functions.ts:248-269`
+
+After all products are added:
+
+```typescript
+await seleccionarPago(page, cuentaContable);
+// Corprecam: " CAJA RIOHACHA "
+// Reciclemos: " Efectivo "
+```
+
+**Steps**:
+1. Click accounting account dropdown
+2. Wait for suggestions table
+3. Select row containing the account name
+4. Close browser page
+
+**Note**: The browser closes after this step, but the document remains in draft state in Siigo. The user must manually review and finalize.
+
+</Steps>
+
+### Response Return
+
+After Playwright automation completes (both companies if applicable):
+
+```typescript
+return res.json({
+  message: "ok"
+});
+```
+
+**HTTP 200**: Indicates automation completed without errors
+
+**Important**: This does NOT mean the document was finalized in Siigo, only that the automation script finished successfully.
+
+</Steps>
+
+## Retry and Error Handling
+
+Every Playwright interaction is wrapped with `retryUntilSuccess()`:
+
+```typescript
+await retryUntilSuccess(
+  async () => {
+    // Automation action
+  },
+  {
+    retries: 5,
+    delayMs: 1000,
+    label: "action description"
+  }
+);
+```
+
+**Behavior**:
+- Attempts action up to 5 times
+- Waits 1 second between attempts
+- Logs warnings for each failure
+- Throws error only after all retries exhausted
+
+**See**: `utils/retryUntilSucces.ts`
+
+## Timing Characteristics
+
+| Phase | Duration | Notes |
+|-------|----------|-------|
+| Request reception | Less than 10ms | Express overhead |
+| Data gathering | 200-500ms | 4 parallel HTTP calls |
+| Transformation | Less than 50ms | Pure computation |
+| Browser launch | 2-3s | Firefox initialization |
+| Login | 10-15s | Multiple page loads |
+| Per product | 3-5s | Autocomplete + waits |
+| Payment selection | 2-3s | Final dropdown |
+| **Total (5 products)** | **30-40s** | Scales linearly with item count |
+
+## Failure Scenarios
+
+### API Failures
+
+If any `getCompras()`, `getCompraItems()`, etc. fails:
+- Unhandled promise rejection
+- HTTP 500 returned to client
+- No retry logic at API level
+
+### Playwright Failures
+
+If automation fails after 5 retries:
+- Browser may be left open in error state
+- HTTP 500 returned to client
+- Partial data may exist in Siigo (previous products saved)
+
+### Network Timeouts
+
+Siigo page loads have 60-second timeouts:
+```typescript
+await page.waitForLoadState("domcontentloaded", { timeout: 60000 });
+```
+
+If exceeded, operation fails with timeout error.
+
+## Parallel vs Sequential Execution
+
+**Parallel**: 
+- Data gathering (Steps 3.1-3.4)
+- Company execution (Corprecam and Reciclemos run sequentially due to `await`)
+
+**Sequential**:
+- Product entry loop (must wait for each product to be saved)
+- Login steps (depend on previous page navigation)
+- Account selection (final step after all products)
+
+## State Management
+
+The system is **stateless**:
+- No database or persistent storage
+- Each request is independent
+- No session tracking between requests
+- Browser instances are created and destroyed per company
+
+All state is passed through function parameters from `server.ts` → `main.ts` → `transformDs.ts` → `functions.ts`.

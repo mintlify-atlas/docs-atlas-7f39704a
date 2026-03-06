@@ -1,0 +1,330 @@
+---
+title: Configuration
+description: Complete environment variable configuration guide for Siigo Corprecam Scraper
+---
+
+## Overview
+
+The Siigo Corprecam Scraper uses environment variables for configuration. All configuration is loaded from a `.env` file in the project root using the `dotenv` package.
+
+<Warning>
+Never commit your `.env` file to version control. Add it to `.gitignore` to prevent accidentally exposing sensitive credentials.
+</Warning>
+
+## Configuration File Location
+
+The application loads configuration from:
+
+```
+project-root/
+├── .env          # Your environment variables (create this file)
+├── config.ts     # Configuration loader (DO NOT EDIT)
+└── server.ts     # Application entry point
+```
+
+## Environment Variables Reference
+
+All environment variables are defined in `config.ts` (config.ts:5-15). Below is a complete reference:
+
+### Server Configuration
+
+#### PORT
+
+- **Description**: The port number on which the Express server will listen
+- **Type**: Number
+- **Default**: `3000`
+- **Required**: No
+- **Example**: `PORT=3000`
+
+```typescript
+PORT: process.env.PORT || 3000
+```
+
+<Note>
+If not specified, the server will default to port 3000. Ensure this port is available and not blocked by your firewall.
+</Note>
+
+### Ngrok Configuration
+
+#### NGROK_AUTHTOKEN
+
+- **Description**: Authentication token for ngrok to create secure tunnels
+- **Type**: String
+- **Default**: None
+- **Required**: Yes
+- **Example**: `NGROK_AUTHTOKEN=2abcDEF123456_xyz789ABC`
+
+```typescript
+NGROK_AUTHTOKEN: process.env.NGROK_AUTHTOKEN
+```
+
+<Tip>
+Get your ngrok authtoken from [ngrok.com/dashboard](https://dashboard.ngrok.com/get-started/your-authtoken) after creating a free account.
+</Tip>
+
+The application uses ngrok to:
+- Expose the local Express server to the internet
+- Provide a public URL for webhook callbacks from the Corprecam system
+- Automatically register the tunnel URL via the `setNgrok()` API call (server.ts:51)
+
+### Siigo Corprecam Credentials
+
+#### USER_SIIGO_CORPRECAM
+
+- **Description**: Username for authenticating with the Siigo Corprecam system
+- **Type**: String
+- **Default**: Empty string
+- **Required**: Yes
+- **Example**: `USER_SIIGO_CORPRECAM=admin@corprecam.com`
+
+```typescript
+USER_SIIGO_CORPRECAM: process.env.USER_SIIGO_CORPRECAM || ""
+```
+
+<Warning>
+This credential is used by Playwright to automate browser login. Ensure it has the necessary permissions in the Siigo system.
+</Warning>
+
+#### PASSWORD_SIIGO_CORPRECAM
+
+- **Description**: Password for authenticating with the Siigo Corprecam system
+- **Type**: String
+- **Default**: Empty string
+- **Required**: Yes
+- **Example**: `PASSWORD_SIIGO_CORPRECAM=your_secure_password`
+
+```typescript
+PASSWORD_SIIGO_CORPRECAM: process.env.PASSWORD_SIIGO_CORPRECAM || ""
+```
+
+<Warning>
+Use a strong password and never share these credentials. They provide full access to the Siigo Corprecam automation.
+</Warning>
+
+### Database Configuration
+
+The application uses MySQL2 for database connectivity (package.json:25). Configure the following variables to connect to your MySQL database:
+
+#### DB_HOST
+
+- **Description**: MySQL server hostname or IP address
+- **Type**: String
+- **Default**: None
+- **Required**: Yes
+- **Example**: `DB_HOST=localhost` or `DB_HOST=192.168.1.100`
+
+```typescript
+DB_HOST: process.env.DB_HOST
+```
+
+#### DB_USER
+
+- **Description**: MySQL database username
+- **Type**: String
+- **Default**: None
+- **Required**: Yes
+- **Example**: `DB_USER=corprecam_user`
+
+```typescript
+DB_USER: process.env.DB_USER
+```
+
+#### DB_PASSWORD
+
+- **Description**: MySQL database password
+- **Type**: String
+- **Default**: None
+- **Required**: Yes
+- **Example**: `DB_PASSWORD=secure_db_password`
+
+```typescript
+DB_PASSWORD: process.env.DB_PASSWORD
+```
+
+#### DB_DATABASE
+
+- **Description**: MySQL database name to connect to
+- **Type**: String
+- **Default**: None
+- **Required**: Yes
+- **Example**: `DB_DATABASE=corprecam_db`
+
+```typescript
+DB_DATABASE: process.env.DB_DATABASE
+```
+
+#### DB_PORT
+
+- **Description**: MySQL server port number
+- **Type**: Number
+- **Default**: None (typically 3306)
+- **Required**: Yes
+- **Example**: `DB_PORT=3306`
+
+```typescript
+DB_PORT: Number(process.env.DB_PORT)
+```
+
+<Note>
+The standard MySQL port is 3306. Only change this if your MySQL server is configured to use a different port.
+</Note>
+
+## Complete .env Example
+
+Here's a complete example `.env` file with all required variables:
+
+```bash
+# Server Configuration
+PORT=3000
+
+# Ngrok Configuration
+# Get your token from: https://dashboard.ngrok.com/get-started/your-authtoken
+NGROK_AUTHTOKEN=2abcDEF123456_xyz789ABCdefGHI456jkl
+
+# Siigo Corprecam Credentials
+USER_SIIGO_CORPRECAM=admin@corprecam.com
+PASSWORD_SIIGO_CORPRECAM=YourSecurePassword123!
+
+# MySQL Database Configuration
+DB_HOST=localhost
+DB_USER=corprecam_user
+DB_PASSWORD=db_secure_password_456
+DB_DATABASE=corprecam_db
+DB_PORT=3306
+```
+
+## Configuration Loading
+
+The configuration is loaded in `config.ts` using the following pattern:
+
+```typescript
+import dotenv from "dotenv";
+
+dotenv.config();
+
+export const config = {
+  PORT: process.env.PORT || 3000,
+  NGROK_AUTHTOKEN: process.env.NGROK_AUTHTOKEN,
+  USER_SIIGO_CORPRECAM: process.env.USER_SIIGO_CORPRECAM || "",
+  PASSWORD_SIIGO_CORPRECAM: process.env.PASSWORD_SIIGO_CORPRECAM || "",
+  DB_HOST: process.env.DB_HOST,
+  DB_USER: process.env.DB_USER,
+  DB_PASSWORD: process.env.DB_PASSWORD,
+  DB_DATABASE: process.env.DB_DATABASE,
+  DB_PORT: Number(process.env.DB_PORT),
+};
+```
+
+The config object is imported throughout the application (server.ts:4, main.ts:3) to access environment variables.
+
+## Environment-Specific Configuration
+
+For different environments (development, staging, production), you can create separate environment files:
+
+```
+.env.development
+.env.staging
+.env.production
+```
+
+Then load the appropriate file based on your environment:
+
+```bash
+# Development
+cp .env.development .env
+node --watch server.ts
+
+# Production
+cp .env.production .env
+node server.ts
+```
+
+<Tip>
+Consider using a process manager like PM2 that supports environment-specific configuration files.
+</Tip>
+
+## Security Best Practices
+
+### 1. Use Strong Credentials
+
+- Use complex passwords with a mix of uppercase, lowercase, numbers, and special characters
+- Never use default or easily guessable passwords
+- Rotate credentials regularly
+
+### 2. Restrict File Permissions
+
+On Unix-based systems, restrict access to your `.env` file:
+
+```bash
+chmod 600 .env
+```
+
+This ensures only the file owner can read and write the file.
+
+### 3. Add .env to .gitignore
+
+Ensure your `.gitignore` includes:
+
+```
+.env
+.env.*
+!.env.example
+```
+
+### 4. Use Environment Variable Validation
+
+Consider adding validation to ensure all required variables are set before starting the application:
+
+```typescript
+const requiredVars = [
+  'NGROK_AUTHTOKEN',
+  'USER_SIIGO_CORPRECAM',
+  'PASSWORD_SIIGO_CORPRECAM',
+  'DB_HOST',
+  'DB_USER',
+  'DB_PASSWORD',
+  'DB_DATABASE',
+  'DB_PORT'
+];
+
+for (const varName of requiredVars) {
+  if (!process.env[varName]) {
+    throw new Error(`Missing required environment variable: ${varName}`);
+  }
+}
+```
+
+## Troubleshooting
+
+### Configuration Not Loading
+
+If your environment variables aren't being loaded:
+
+1. Ensure the `.env` file is in the project root directory
+2. Check for syntax errors (no spaces around `=`)
+3. Verify the file is named exactly `.env` (not `.env.txt`)
+4. Restart the application after making changes
+
+### Database Connection Failures
+
+If you can't connect to MySQL:
+
+1. Verify MySQL is running: `sudo systemctl status mysql`
+2. Test credentials: `mysql -h $DB_HOST -u $DB_USER -p$DB_PASSWORD`
+3. Check if the database exists: `SHOW DATABASES;`
+4. Verify user permissions: `SHOW GRANTS FOR 'corprecam_user'@'localhost';`
+
+### Ngrok Authentication Errors
+
+If ngrok fails to connect:
+
+1. Verify your authtoken is correct
+2. Check your ngrok account is active at [ngrok.com](https://ngrok.com)
+3. Ensure you haven't exceeded your tunnel limit (2 concurrent on free tier)
+
+## Next Steps
+
+Once configuration is complete:
+
+1. [Run the Application](/running) - Start the application and test your configuration
+2. Review the API endpoints in the source code to understand the scraping workflow

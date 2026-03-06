@@ -1,0 +1,413 @@
+---
+title: "Core Utility Functions"
+description: "Browser automation and Siigo interaction functions for document processing"
+---
+
+This module contains the core utility functions for browser automation and interaction with Siigo Nube. These functions handle everything from browser initialization to product selection and payment processing.
+
+## Browser Management
+
+### launchBrowser()
+
+Launches a Firefox browser instance with Playwright for automated Siigo interaction.
+
+```typescript
+async function launchBrowser(): Promise<{
+  browser: Browser;
+  page: Page;
+}>
+```
+
+**Returns:**
+- `browser`: Firefox browser instance
+- `page`: Page with 1024x768 viewport
+
+**Configuration:**
+- Browser: Firefox (non-headless mode)
+- Viewport: 1024x768
+
+**Usage Example:**
+
+```typescript
+import { launchBrowser } from "./utils/functions.ts";
+
+const { browser, page } = await launchBrowser();
+// Use page for automation
+await browser.close();
+```
+
+**Note:** The browser launches in visible mode (`headless: false`) to allow visual monitoring of the automation process.
+
+---
+
+## Authentication
+
+### login()
+
+Authenticates with Siigo Nube and navigates to the document creation form.
+
+```typescript
+async function login(
+  page: Page,
+  username: string,
+  password: string,
+  documentoSoporteLabelCode: string,
+  nit: string,
+  nit_empresa: string
+): Promise<void>
+```
+
+**Parameters:**
+- `page`: Playwright page instance
+- `username`: Siigo user email
+- `password`: Siigo user password
+- `documentoSoporteLabelCode`: Document type code (e.g., "25470")
+- `nit`: Provider NIT number
+- `nit_empresa`: Company NIT ("900142913" for Corprecam, "901328575" for Reciclemos)
+
+**Process Flow:**
+
+1. **Navigate to login:** Goes to `https://siigonube.siigo.com/#/login`
+2. **Enter credentials:** Fills username and password fields
+3. **Submit login:** Clicks the submit button
+4. **Select company:** Finds and clicks "Ingresar" button for the specified company NIT
+5. **Create document:** Clicks "Crear" button and selects "Documento soporte"
+6. **Select document type:** For Corprecam (900142913), selects the document type
+7. **Search provider:** Enters provider NIT in the search field
+8. **Auto-fill consecutive:** Reads and fills the automatic consecutive number
+
+**Usage Example:**
+
+```typescript
+import { login } from "./utils/functions.ts";
+
+await login(
+  page,
+  "user@example.com",
+  "password123",
+  "25470",
+  "123456789",
+  "900142913"
+);
+```
+
+**Retry Logic:** This function is wrapped in `retryUntilSuccess()` with label "login a Siigo" for automatic retry on failure.
+
+**Key Locators:**
+- Username: `#siigoSignInName`
+- Password: `#siigoPassword`
+- Company row: `tr` containing the NIT
+- Document type: `a[data-value="Documento soporte"]`
+- Provider search: Input under "Proveedores" span
+- Consecutive: `#lblAutomaticNumber`
+
+---
+
+## Product Selection
+
+### selectProducto()
+
+Searches and selects a product by its code in Siigo's autocomplete field.
+
+```typescript
+async function selectProducto(
+  page: Page,
+  codigo: string
+): Promise<void>
+```
+
+**Parameters:**
+- `page`: Playwright page instance
+- `codigo`: Product code to search for
+
+**Process:**
+
+1. Clicks the product autocomplete input
+2. Clears any previous content
+3. Types the product code with 150ms delay between characters
+4. Waits for suggestions table to appear
+5. Finds and clicks the exact code match
+
+**Usage Example:**
+
+```typescript
+import { selectProducto } from "./utils/functions.ts";
+
+await selectProducto(page, "MAT-001");
+```
+
+**Key Details:**
+- Uses `pressSequentially()` with 150ms delay for Angular detection
+- Searches for exact text match using `:text-is()` selector
+- Wrapped in `retryUntilSuccess()` with label "selección de producto"
+
+**Locators:**
+- Input: `#trEditRow #editProduct #autocomplete_autocompleteInput`
+- Suggestions: `.siigo-ac-table tr`
+
+---
+
+### selectBodega()
+
+Selects a warehouse (bodega) from Siigo's dropdown.
+
+```typescript
+async function selectBodega(
+  page: Page,
+  nombre: string
+): Promise<void>
+```
+
+**Parameters:**
+- `page`: Playwright page instance
+- `nombre`: Warehouse name (e.g., " BODEGA DE RIOHACHA ")
+
+**Process:**
+
+1. Clicks the warehouse autocomplete input
+2. Waits for suggestions to load
+3. Finds and clicks the warehouse by name
+
+**Usage Example:**
+
+```typescript
+import { selectBodega } from "./utils/functions.ts";
+
+await selectBodega(page, " BODEGA DE RIOHACHA ");
+```
+
+**Note:** The warehouse name typically includes leading/trailing spaces. This function is only called for the first item in Corprecam documents.
+
+**Locators:**
+- Input: `#trEditRow #editProductWarehouse #autocomplete_autocompleteInput`
+- Suggestions: `.suggestions table.siigo-ac-table tr`
+
+---
+
+## Row Management
+
+### prepararNuevaFila()
+
+Ensures a new product row is ready for input in the Siigo form.
+
+```typescript
+export async function prepararNuevaFila(page: Page): Promise<void>
+```
+
+**Parameters:**
+- `page`: Playwright page instance
+
+**Smart Logic:**
+
+1. **Check if row is ready:**
+   - Verifies if product input is visible and enabled
+   - Returns immediately if ready
+
+2. **Open new row if needed:**
+   - Clicks "Agregar otro ítem" button if row is not ready
+   - Waits for input to become visible
+   - Retries click if first attempt fails
+
+3. **Double-check mechanism:**
+   - Includes fallback retry with 10-second timeout
+   - Ensures the form is truly ready before proceeding
+
+**Usage Example:**
+
+```typescript
+import { prepararNuevaFila } from "./utils/functions.ts";
+
+// Before adding each product
+for (const producto of productos) {
+  await prepararNuevaFila(page);
+  await selectProducto(page, producto.codigo);
+  // ... rest of the flow
+}
+```
+
+**Locators:**
+- Input: `#trEditRow #editProduct #autocomplete_autocompleteInput`
+- Add button: `#new-item` or `#new-item-text`
+
+**Retry:** Wrapped in `retryUntilSuccess()` with label "preparar nueva fila".
+
+---
+
+## Data Entry
+
+### llenarCantidadValor()
+
+Fills quantity and unit value fields for a product line and adds it to the document.
+
+```typescript
+async function llenarCantidadValor(
+  page: Page,
+  cantidad: number,
+  valor: number
+): Promise<void>
+```
+
+**Parameters:**
+- `page`: Playwright page instance
+- `cantidad`: Quantity of the product
+- `valor`: Unit price value
+
+**Process:**
+
+1. **Wait for inputs:** Ensures quantity input is visible
+2. **Fill quantity:** Enters the product quantity
+3. **Fill value:** Enters the unit price
+4. **Click add button:** Adds the line to the document
+5. **Wait for reset:** Waits for the form to clear and reset for the next item
+
+**Synchronization Strategy:**
+
+- Expects quantity input to have empty value after adding
+- Includes 1-second timeout as safety fallback
+- Prevents race conditions in the next iteration
+
+**Usage Example:**
+
+```typescript
+import { llenarCantidadValor } from "./utils/functions.ts";
+
+await llenarCantidadValor(page, 10, 15000);
+// Quantity: 10 units
+// Unit value: $15,000
+```
+
+**Locators:**
+- Quantity: `siigo-inputdecimal[formcontrolname="editQuantity"] input.dx-texteditor-input`
+- Value: `siigo-inputdecimal[formcontrolname="editUnitValue"] input.dx-texteditor-input`
+- Add button: `#new-item` or text "Agregar otro ítem"
+
+**Retry:** Wrapped in `retryUntilSuccess()` with label "llenar cantidad y valor".
+
+---
+
+## Payment Selection
+
+### seleccionarPago()
+
+Selects the payment account and closes the page after completing the document.
+
+```typescript
+async function seleccionarPago(
+  page: Page,
+  cuentaNombre: string
+): Promise<void>
+```
+
+**Parameters:**
+- `page`: Playwright page instance
+- `cuentaNombre`: Account name (e.g., " CAJA RIOHACHA " or " Efectivo ")
+
+**Process:**
+
+1. Clicks the account dropdown
+2. Waits for account suggestions to load
+3. Finds and clicks the matching account
+4. Closes the page
+
+**Usage Example:**
+
+```typescript
+import { seleccionarPago } from "./utils/functions.ts";
+
+// For Corprecam
+await seleccionarPago(page, " CAJA RIOHACHA ");
+
+// For Reciclemos
+await seleccionarPago(page, " Efectivo ");
+```
+
+**Locator:**
+- Dropdown: `#editingAcAccount_autocompleteInput`
+- Suggestions: `.suggestions .siigo-ac-table tr`
+
+**Retry:** Wrapped in `retryUntilSuccess()` with label "selección de pago".
+
+**Note:** This function closes the page after selection, marking the end of the document creation flow.
+
+---
+
+## Complete Workflow Example
+
+Here's how all functions work together to create a support document:
+
+```typescript
+import {
+  launchBrowser,
+  login,
+  prepararNuevaFila,
+  selectProducto,
+  selectBodega,
+  llenarCantidadValor,
+  seleccionarPago,
+} from "./utils/functions.ts";
+
+const { page } = await launchBrowser();
+
+// Authenticate and prepare document
+await login(
+  page,
+  "user@corprecam.com",
+  "password",
+  "25470",
+  "900123456",
+  "900142913"
+);
+
+// Add products
+const productos = [
+  { codigo: "MAT-001", cantidad: 10, precio: 5000 },
+  { codigo: "MAT-002", cantidad: 5, precio: 8000 },
+];
+
+for (let i = 0; i < productos.length; i++) {
+  await prepararNuevaFila(page);
+  await selectProducto(page, productos[i].codigo);
+  
+  // Select warehouse only for first item in Corprecam
+  if (i === 0) {
+    await selectBodega(page, " BODEGA DE RIOHACHA ");
+  }
+  
+  await llenarCantidadValor(
+    page,
+    productos[i].cantidad,
+    productos[i].precio
+  );
+}
+
+// Complete the document
+await seleccionarPago(page, " CAJA RIOHACHA ");
+```
+
+---
+
+## Error Handling
+
+All interaction functions in this module use the `retryUntilSuccess()` utility:
+
+- **Automatic retries:** Up to 5 attempts by default
+- **Labeled actions:** Each function has a descriptive label for logging
+- **Progressive delays:** 1-second delay between retries
+- **Detailed logging:** Console output for each retry attempt
+
+See [Helpers](/utilities/helpers) for details on the retry mechanism.
+
+---
+
+## Dependencies
+
+```typescript
+import { firefox, type Page, type Browser, expect } from "@playwright/test";
+import { retryUntilSuccess } from "./retryUntilSucces.ts";
+```
+
+## Related Documentation
+
+- [Data Transformations](/utilities/transformations) - Transform data before using these functions
+- [Helpers](/utilities/helpers) - Retry logic and string utilities
+- [Workflow](/architecture/workflow) - See how these functions orchestrate the complete process

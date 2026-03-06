@@ -1,0 +1,192 @@
+---
+title: System Architecture Overview
+description: High-level architecture of the Siigo Corprecam Scraper automation system
+---
+
+## Introduction
+
+The Siigo Corprecam Scraper is a backend automation system that integrates with the Corprecam administrative platform to automate the creation of support documents (Documento Soporte) in Siigo Nube. The system receives purchase order data, processes it, and uses browser automation to fill out forms in the Siigo accounting platform.
+
+## Architecture Components
+
+The system is built with a layered architecture consisting of four main components:
+
+### 1. Express HTTP Server
+
+**Location**: `server.ts`
+
+The entry point of the application that:
+- Exposes a REST API endpoint (`/scrapping`) to receive purchase order requests
+- Initializes the ngrok tunnel for public accessibility
+- Orchestrates the entire data flow from request to automation
+
+```typescript
+app.post("/scrapping", async (req, res) => {
+  const body = req.body;
+  
+  const compra = await getCompras(body.compra);
+  const compraItems = await getCompraItems(body.compra);
+  // ... data gathering and transformation
+  
+  await run_playwright(ds);
+  
+  return res.json({ message: "ok" });
+});
+```
+
+### 2. API Layer
+
+**Location**: `api/php.ts`
+
+Provides integration with the Corprecam PHP backend through HTTP requests:
+
+- `getCompras()` - Fetches purchase order header information
+- `getCompraItems()` - Retrieves line items for the purchase order
+- `getMateriales()` - Gets material/product details for each item
+- `getMicro()` - Retrieves micro-route information
+- `setNgrok()` - Registers the public ngrok URL with the Corprecam backend
+
+All API calls target: `https://corprecam.codesolutions.com.co/administrativo/`
+
+### 3. Data Transformation Layer
+
+**Location**: `utils/transformDs.ts`
+
+Transforms raw database records into structured support documents:
+
+```typescript
+export function transfromDs(
+  compra: Compra,
+  compraItems: CompraItem[],
+  materiales: Material[],
+  micros: Micro
+): DocumentoSoporte
+```
+
+**Key Logic**: Separates products by company (`emp_id_fk`):
+- `emp_id_fk === 1` → Corprecam products
+- `emp_id_fk === 2` → Reciclemos products
+
+This separation is critical because each company requires:
+- Different accounting accounts ("CAJA RIOHACHA" vs "Efectivo")
+- Different NIT identifiers (900142913 vs 901328575)
+- Separate document entries in Siigo
+
+### 4. Playwright Automation Layer
+
+**Location**: `main.ts`, `utils/functions.ts`
+
+Executes browser automation to interact with Siigo Nube:
+
+**Core Functions** (`utils/functions.ts`):
+- `login()` - Authenticates and navigates to document creation
+- `prepararNuevaFila()` - Opens a new product line in the form
+- `selectProducto()` - Searches and selects products by code
+- `selectBodega()` - Selects warehouse ("BODEGA DE RIOHACHA")
+- `llenarCantidadValor()` - Fills quantity and unit price
+- `seleccionarPago()` - Selects payment account
+
+**Retry Mechanism**: All automation functions are wrapped with `retryUntilSuccess()` to handle timing issues and transient failures (default: 5 retries with 1s delay).
+
+## Technology Stack
+
+- **Runtime**: Node.js with TypeScript
+- **Web Framework**: Express.js
+- **Browser Automation**: Playwright (Firefox)
+- **Tunneling**: ngrok (for public API access)
+- **HTTP Client**: Native `fetch` API
+
+## Multi-Company Architecture
+
+The system handles two separate legal entities within a single workflow:
+
+| Aspect | Corprecam | Reciclemos |
+|--------|-----------|------------|
+| **Company Filter** | `emp_id_fk === 1` | `emp_id_fk === 2` |
+| **NIT** | 900142913 | 901328575 |
+| **Account** | CAJA RIOHACHA | Efectivo |
+| **Document Type** | 25470 (Corprecam only) | Standard |
+| **Warehouse** | BODEGA DE RIOHACHA | BODEGA DE RIOHACHA |
+
+See `main.ts:16-40` for the conditional execution logic.
+
+## Security & Configuration
+
+All sensitive credentials are managed through environment variables loaded via `dotenv`:
+
+```typescript
+// config.ts
+export const config = {
+  PORT: process.env.PORT || 3000,
+  NGROK_AUTHTOKEN: process.env.NGROK_AUTHTOKEN,
+  USER_SIIGO_CORPRECAM: process.env.USER_SIIGO_CORPRECAM,
+  PASSWORD_SIIGO_CORPRECAM: process.env.PASSWORD_SIIGO_CORPRECAM,
+};
+```
+
+## ngrok Integration
+
+The system uses ngrok to expose the local Express server to the internet:
+
+**Purpose**:
+- Allows the Corprecam web application to trigger automation jobs remotely
+- Provides a stable public URL even when running on local/internal networks
+- The URL is dynamically registered with Corprecam via `setNgrok()` on startup
+
+```typescript
+// server.ts:46-51
+const listener = await ngrok.forward({
+  addr: 3000,
+  authtoken: config.NGROK_AUTHTOKEN,
+});
+
+await setNgrok(listener.url());
+```
+
+## Error Handling
+
+The system implements multiple layers of error resilience:
+
+1. **Retry Logic**: All Playwright actions use `retryUntilSuccess()` with configurable attempts
+2. **Browser Waits**: Explicit waits for DOM elements (`waitFor()`, `waitForLoadState()`)
+3. **Force Actions**: Critical clicks use `{ force: true }` to bypass intercepting elements
+4. **Timeouts**: Extended timeouts (60s) for Siigo page loads due to slow performance
+
+See `utils/retryUntilSucces.ts` for the retry implementation.
+
+## Key Design Decisions
+
+### Headless: False
+
+The browser runs in visible mode (`headless: false`) to:
+- Allow debugging of automation failures
+- Provide visual confirmation of execution
+- Comply with potential anti-bot mechanisms in Siigo
+
+### Sequential Product Entry
+
+Products are added one-by-one in a loop (`main.ts:92-106`) rather than in parallel because:
+- Siigo's form only supports editing one row at a time
+- Each product requires waiting for DOM updates before proceeding
+- The "Agregar otro ítem" button must be clicked between entries
+
+### Company-Specific Login
+
+Each company (Corprecam/Reciclemos) gets its own Playwright session with separate:
+- Login credentials (same user, different company selection)
+- NIT selection during login
+- Accounting configuration
+
+This ensures complete data isolation between entities.
+
+## Scalability Considerations
+
+**Current Limitations**:
+- Single-threaded execution (one purchase order at a time)
+- Browser automation is inherently slow (~30s per document)
+- No job queue for concurrent requests
+
+**Potential Improvements**:
+- Implement a job queue (Bull, BullMQ) for request handling
+- Run multiple browser contexts in parallel (separate tabs/windows)
+- Add webhook callbacks for long-running jobs instead of blocking HTTP responses

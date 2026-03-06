@@ -1,0 +1,478 @@
+---
+title: "Data Transformations"
+description: "Transform database records into Siigo-compatible document structures"
+---
+
+This module handles data transformation from the database schema to the format required by Siigo Nube. It converts purchase records, items, materials, and micro-route data into structured support documents.
+
+## Overview
+
+The transformation process bridges two systems:
+
+1. **Source:** Database tables (Compra, CompraItem, Material, Micro)
+2. **Target:** Siigo support documents with company-specific product lists
+
+**Key Features:**
+- Separates products by company (Corprecam vs Reciclemos)
+- Maps material codes to Siigo product codes
+- Structures data for automated form filling
+- Handles multi-company workflows
+
+---
+
+## Core Transformation
+
+### transfromDs()
+
+Transforms database purchase data into a structured support document.
+
+```typescript
+export function transfromDs(
+  compra: Compra,
+  compraItems: CompraItem[],
+  materiales: Material[],
+  micros: Micro
+): DocumentoSoporte
+```
+
+**Parameters:**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `compra` | `Compra` | Purchase record with provider and micro-route info |
+| `compraItems` | `CompraItem[]` | Array of purchased items with quantities and prices |
+| `materiales` | `Material[]` | Material catalog with codes and company associations |
+| `micros` | `Micro` | Micro-route information |
+
+**Returns:** `DocumentoSoporte`
+
+```typescript
+interface DocumentoSoporte {
+  proveedor_id: string;    // Provider NIT
+  micro_id: string;        // Micro-route name
+  corprecam: Products[];   // Products for Corprecam (emp_id === 1)
+  reciclemos: Products[];  // Products for Reciclemos (emp_id === 2)
+}
+```
+
+**Product Structure:**
+
+```typescript
+interface Products {
+  codigo: string;          // Material code (e.g., "MAT-001")
+  cantidad: number;        // Quantity purchased
+  precio: number;          // Unit price
+  empresa: number | undefined; // Company ID (1 = Corprecam, 2 = Reciclemos)
+}
+```
+
+### Transformation Flow
+
+<Steps>
+  <Step title="Map Purchase Items">
+    Converts each `CompraItem` to a `Products` object by:
+    - Finding the corresponding material by `mat_id`
+    - Extracting the material code
+    - Copying quantity and unit price
+    - Including the company ID (`emp_id_fk`)
+  </Step>
+  
+  <Step title="Separate by Company">
+    Uses `reduce()` to partition products into two arrays:
+    - **Corprecam:** Products where `empresa === 1`
+    - **Reciclemos:** Products where `empresa === 2`
+  </Step>
+  
+  <Step title="Build Document Structure">
+    Returns a `DocumentoSoporte` object with:
+    - Provider ID from `compra.comp_asociado`
+    - Micro-route name from `micros.mic_nom`
+    - Separated product lists for each company
+  </Step>
+</Steps>
+
+### Usage Example
+
+```typescript
+import { transfromDs } from "./utils/transformDs.ts";
+import type { Compra, CompraItem, Material, Micro } from "../types/types.ts";
+
+// Sample database records
+const compra: Compra = {
+  com_codigo: 12345,
+  comp_asociado: "900123456",
+  com_micro_ruta: "RUTA-01"
+};
+
+const compraItems: CompraItem[] = [
+  {
+    citem_codigo: 1,
+    citem_id_compra: 12345,
+    citem_material: 101,
+    citem_cantidad: 10,
+    citem_valor_unitario: 5000,
+    citem_total: 50000,
+    citem_rechazo: 0
+  },
+  {
+    citem_codigo: 2,
+    citem_id_compra: 12345,
+    citem_material: 102,
+    citem_cantidad: 5,
+    citem_valor_unitario: 8000,
+    citem_total: 40000,
+    citem_rechazo: 0
+  }
+];
+
+const materiales: Material[] = [
+  {
+    mat_id: 101,
+    mat_codigo: "PET-001",
+    mat_nom: "PET Transparente",
+    emp_id_fk: 1  // Corprecam
+  },
+  {
+    mat_id: 102,
+    mat_codigo: "CARTON-001",
+    mat_nom: "Cartón Reciclado",
+    emp_id_fk: 2  // Reciclemos
+  }
+];
+
+const micro: Micro = {
+  mic_codigo: 1,
+  mic_nom: "Centro"
+};
+
+// Transform the data
+const documentoSoporte = transfromDs(
+  compra,
+  compraItems,
+  materiales,
+  micro
+);
+
+console.log(documentoSoporte);
+// Output:
+// {
+//   proveedor_id: "900123456",
+//   micro_id: "Centro",
+//   corprecam: [
+//     { codigo: "PET-001", cantidad: 10, precio: 5000, empresa: 1 }
+//   ],
+//   reciclemos: [
+//     { codigo: "CARTON-001", cantidad: 5, precio: 8000, empresa: 2 }
+//   ]
+// }
+```
+
+### Data Mapping
+
+**Database to Document:**
+
+| Source Field | Target Field | Transformation |
+|--------------|--------------|----------------|
+| `compra.comp_asociado` | `proveedor_id` | Direct copy |
+| `micros.mic_nom` | `micro_id` | Convert to string |
+| `compraItems[].citem_material` | - | Used to lookup material |
+| `materiales[].mat_codigo` | `productos[].codigo` | Material lookup |
+| `compraItems[].citem_cantidad` | `productos[].cantidad` | Direct copy |
+| `compraItems[].citem_valor_unitario` | `productos[].precio` | Direct copy |
+| `materiales[].emp_id_fk` | `productos[].empresa` | Used for company separation |
+
+---
+
+## Workflow Automation
+
+### playwright_corprecam_reciclemos()
+
+Automated workflow to create a support document in Siigo using Playwright.
+
+```typescript
+export async function playwright_corprecam_reciclemos(
+  documentoSoporte: P[],
+  documentoSoporteLabelCode: string,
+  bodegaRiohacha: string,
+  cuentaContable: string,
+  proveedor_id: string,
+  USER: string,
+  PASSWORD: string,
+  nit_empresa: string
+): Promise<void>
+```
+
+**Parameters:**
+
+| Parameter | Type | Description | Example |
+|-----------|------|-------------|----------|
+| `documentoSoporte` | `P[]` | Array of products to add | `[{codigo: "MAT-001", cantidad: 10, precio: 5000}]` |
+| `documentoSoporteLabelCode` | `string` | Document type code | `"25470"` |
+| `bodegaRiohacha` | `string` | Warehouse name | `" BODEGA DE RIOHACHA "` |
+| `cuentaContable` | `string` | Payment account name | `" CAJA RIOHACHA "` |
+| `proveedor_id` | `string` | Provider NIT | `"900123456"` |
+| `USER` | `string` | Siigo username | `"user@example.com"` |
+| `PASSWORD` | `string` | Siigo password | `"password123"` |
+| `nit_empresa` | `string` | Company NIT | `"900142913"` or `"901328575"` |
+
+**Process Flow:**
+
+<Steps>
+  <Step title="Launch Browser">
+    Creates a new Firefox browser instance using `launchBrowser()`
+  </Step>
+  
+  <Step title="Conditional Execution">
+    Only proceeds if `documentoSoporte.length > 0`
+  </Step>
+  
+  <Step title="Login to Siigo">
+    Authenticates with the provided credentials and prepares the document form
+  </Step>
+  
+  <Step title="Process Each Product">
+    For each product in the array:
+    - Prepares a new row
+    - Selects the product by code
+    - Selects warehouse (first item only, Corprecam only)
+    - Fills quantity and price
+  </Step>
+  
+  <Step title="Complete Payment">
+    Selects the payment account and closes the page
+  </Step>
+</Steps>
+
+### Usage Example
+
+```typescript
+import { playwright_corprecam_reciclemos } from "./utils/transformDs.ts";
+import { config } from "../config.ts";
+
+const productos = [
+  { codigo: "MAT-001", cantidad: 10, precio: 5000 },
+  { codigo: "MAT-002", cantidad: 5, precio: 8000 },
+];
+
+await playwright_corprecam_reciclemos(
+  productos,
+  "25470",                        // Document type
+  " BODEGA DE RIOHACHA ",         // Warehouse
+  " CAJA RIOHACHA ",              // Payment account
+  "900123456",                    // Provider NIT
+  config.USER_SIIGO_CORPRECAM,    // Username
+  config.PASSWORD_SIIGO_CORPRECAM, // Password
+  "900142913"                     // Company NIT (Corprecam)
+);
+```
+
+### Company-Specific Behavior
+
+**Corprecam (900142913):**
+- Document type selection is required
+- Warehouse selection happens for the first item
+- Uses "CAJA RIOHACHA" account
+
+**Reciclemos (901328575):**
+- No document type selection
+- No warehouse selection needed
+- Uses "Efectivo" account
+
+---
+
+## Integration with Main Workflow
+
+The transformation functions integrate with the main workflow in `main.ts`:
+
+```typescript
+import { run_playwright } from "./main.ts";
+import { transfromDs } from "./utils/transformDs.ts";
+
+// 1. Transform database data
+const documentoSoporte = transfromDs(
+  compra,
+  compraItems,
+  materiales,
+  micro
+);
+
+// 2. Run automated workflow
+await run_playwright(documentoSoporte);
+```
+
+**Inside `run_playwright()` (main.ts:12-41):**
+
+```typescript
+export async function run_playwright(documentoSoporte: DocumentoSoporte) {
+  // Process Corprecam products
+  if (documentoSoporte.corprecam.length > 0) {
+    await playwright_corprecam_reciclemos(
+      documentoSoporte.corprecam,
+      "25470",
+      " BODEGA DE RIOHACHA ",
+      " CAJA RIOHACHA ",
+      documentoSoporte.proveedor_id,
+      config.USER_SIIGO_CORPRECAM,
+      config.PASSWORD_SIIGO_CORPRECAM,
+      "900142913"
+    );
+  }
+
+  // Process Reciclemos products
+  if (documentoSoporte.reciclemos.length > 0) {
+    await playwright_corprecam_reciclemos(
+      documentoSoporte.reciclemos,
+      "25470",
+      " BODEGA DE RIOHACHA ",
+      " Efectivo ",
+      documentoSoporte.proveedor_id,
+      config.USER_SIIGO_CORPRECAM,
+      config.PASSWORD_SIIGO_CORPRECAM,
+      "901328575"
+    );
+  }
+}
+```
+
+---
+
+## Type Definitions
+
+### Source Types
+
+From `types/types.ts`:
+
+```typescript
+export interface Compra extends RowDataPacket {
+  com_codigo: number;           // Purchase ID
+  comp_asociado: string;        // Provider NIT
+  com_micro_ruta: string;       // Micro-route code
+}
+
+export interface CompraItem extends RowDataPacket {
+  citem_codigo: number;         // Item ID
+  citem_id_compra: number;      // Purchase ID (foreign key)
+  citem_material: number;       // Material ID (foreign key)
+  citem_cantidad: number;       // Quantity
+  citem_valor_unitario: number; // Unit price
+  citem_total: number;          // Total value
+  citem_rechazo: number;        // Rejected quantity
+}
+
+export interface Material extends RowDataPacket {
+  mat_id: number;               // Material ID
+  mat_codigo: string;           // Material code (for Siigo)
+  mat_nom: string;              // Material name
+  emp_id_fk: number;            // Company ID (1 = Corprecam, 2 = Reciclemos)
+}
+
+export interface Micro extends RowDataPacket {
+  mic_nom: string;              // Micro-route name
+}
+```
+
+### Target Types
+
+```typescript
+export interface Products {
+  codigo: string;               // Product code
+  cantidad: number;             // Quantity
+  precio: number;               // Unit price
+}
+
+export interface DocumentoSoporte {
+  proveedor_id: string;         // Provider NIT
+  micro_id: string;             // Micro-route name
+  corprecam: Products[];        // Products for Corprecam
+  reciclemos: Products[];       // Products for Reciclemos
+}
+```
+
+---
+
+## Dependencies
+
+```typescript
+import { type Page } from "@playwright/test";
+import {
+  type Compra,
+  type CompraItem,
+  type Material,
+  type Micro,
+  type DocumentoSoporte,
+  type Products as P,
+} from "../types/types.ts";
+import { agregarEspacios } from "./agregarEspacios.ts";
+import {
+  launchBrowser,
+  llenarCantidadValor,
+  login,
+  prepararNuevaFila,
+  seleccionarPago,
+  selectBodega,
+  selectProducto,
+} from "./functions.ts";
+import { config } from "../config.ts";
+```
+
+---
+
+## Complete Example
+
+End-to-end transformation and automation:
+
+```typescript
+import { transfromDs, playwright_corprecam_reciclemos } from "./utils/transformDs.ts";
+import { config } from "./config.ts";
+
+// Step 1: Fetch data from database
+const compra = await db.query("SELECT * FROM compras WHERE com_codigo = ?", [12345]);
+const compraItems = await db.query("SELECT * FROM compra_items WHERE citem_id_compra = ?", [12345]);
+const materiales = await db.query("SELECT * FROM materiales");
+const micro = await db.query("SELECT * FROM micros WHERE mic_codigo = ?", [1]);
+
+// Step 2: Transform data
+const documentoSoporte = transfromDs(
+  compra[0],
+  compraItems,
+  materiales,
+  micro[0]
+);
+
+// Step 3: Automate Corprecam document
+if (documentoSoporte.corprecam.length > 0) {
+  await playwright_corprecam_reciclemos(
+    documentoSoporte.corprecam,
+    "25470",
+    " BODEGA DE RIOHACHA ",
+    " CAJA RIOHACHA ",
+    documentoSoporte.proveedor_id,
+    config.USER_SIIGO_CORPRECAM,
+    config.PASSWORD_SIIGO_CORPRECAM,
+    "900142913"
+  );
+}
+
+// Step 4: Automate Reciclemos document
+if (documentoSoporte.reciclemos.length > 0) {
+  await playwright_corprecam_reciclemos(
+    documentoSoporte.reciclemos,
+    "25470",
+    " BODEGA DE RIOHACHA ",
+    " Efectivo ",
+    documentoSoporte.proveedor_id,
+    config.USER_SIIGO_CORPRECAM,
+    config.PASSWORD_SIIGO_CORPRECAM,
+    "901328575"
+  );
+}
+```
+
+---
+
+## Related Documentation
+
+- [Core Functions](/utilities/functions) - Browser automation functions used by the workflow
+- [Helpers](/utilities/helpers) - String and retry utilities
+- [Data Models](/api/data-models) - Complete type definitions
+- [Workflow](/architecture/workflow) - High-level orchestration

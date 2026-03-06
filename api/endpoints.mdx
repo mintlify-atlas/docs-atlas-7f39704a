@@ -1,0 +1,92 @@
+---
+title: 'API Endpoints'
+description: 'REST API endpoints for the Siigo Corprecam Scraper'
+---
+
+## POST /scrapping
+
+Initiates the scraping process by fetching purchase data from the Corprecam system and submitting it to Siigo.
+
+### Request
+
+<ParamField body="compra" type="string" required>
+  The purchase code (com_codigo) to process. This identifier is used to fetch the purchase record and its associated items from the Corprecam system.
+</ParamField>
+
+### Request Example
+
+```bash
+curl -X POST http://localhost:3000/scrapping \
+  -H "Content-Type: application/json" \
+  -d '{
+    "compra": "12345"
+  }'
+```
+
+```json
+{
+  "compra": "12345"
+}
+```
+
+### Process Flow
+
+When this endpoint is called, it performs the following operations:
+
+1. **Fetch Purchase Data** - Retrieves the main purchase record using `getCompras()`
+2. **Fetch Purchase Items** - Gets all line items for the purchase using `getCompraItems()`
+3. **Fetch Materials** - Retrieves material details for each item using `getMateriales()`
+4. **Fetch Micro Route** - Gets the micro route information using `getMicro()`
+5. **Transform Data** - Converts the data into Siigo DocumentoSoporte format
+6. **Execute Playwright** - Automates the Siigo web interface to submit the data
+
+### Response
+
+<ResponseField name="message" type="string">
+  Status message indicating successful processing. Returns "ok" when the scraping process completes successfully.
+</ResponseField>
+
+### Response Example
+
+```json
+{
+  "message": "ok"
+}
+```
+
+### Status Codes
+
+- **200** - Success: The purchase data was processed and submitted to Siigo successfully
+- **500** - Internal Server Error: An error occurred during data fetching or processing
+
+### Implementation Details
+
+The endpoint implementation (server.ts:21-41):
+
+```typescript
+app.post("/scrapping", async (req, res) => {
+  const body = req.body;
+
+  const compra = await getCompras(body.compra);
+  const compraItems = await getCompraItems(body.compra);
+  const citem_material = compraItems.map((row) => row.citem_material);
+  const materiales = await getMateriales(citem_material);
+  const micro = await getMicro(Number(compra[0].com_micro_ruta));
+  const ds = transfromDs(compra[0], compraItems, materiales, micro);
+  
+  await run_playwright(ds);
+
+  return res.json({
+    message: "ok",
+  });
+});
+```
+
+### Notes
+
+- The endpoint uses CORS and accepts JSON payloads
+- All data fetching operations are performed sequentially
+- The purchase code is used to query multiple related datasets
+- Material IDs are extracted from purchase items before fetching material details
+- The micro route ID is extracted from the purchase record and converted to a number
+- The endpoint waits for the Playwright automation to complete before responding

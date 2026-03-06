@@ -1,0 +1,581 @@
+---
+title: Retry Logic
+description: Resilient automation with exponential backoff and intelligent error recovery
+---
+
+## Overview
+
+Web automation is inherently unreliable due to network latency, server delays, and dynamic content rendering. The Siigo Corprecam Scraper implements a **retry mechanism** that automatically recovers from transient failures, ensuring robust automation even in unstable environments.
+
+## Why Retry Logic is Essential
+
+### Common Automation Failures
+
+| Failure Type | Cause | Recovery |
+|--------------|-------|----------|
+| **Timeout** | Slow network, server lag | Retry with same parameters |
+| **Element Not Found** | Delayed rendering, Angular loading | Wait and retry |
+| **Stale Element** | DOM re-render, SPA navigation | Re-locate element and retry |
+| **Network Error** | Connection drop, proxy issues | Retry entire operation |
+| **Click Intercepted** | Modal overlay, transition | Wait for overlay to clear, retry |
+
+<Warning>
+  Without retry logic, a single network hiccup or slow server response would crash the entire automation workflow.
+</Warning>
+
+## Implementation
+
+The `retryUntilSuccess()` function wraps unreliable operations:
+
+```typescript
+export async function retryUntilSuccess<T>(
+  action: () => Promise<T>,
+  {
+    retries = 5,
+    delayMs = 1000,
+    label = "acción",
+  }: {
+    retries?: number;
+    delayMs?: number;
+    label?: string;
+  } = {}
+): Promise<T> {
+  let lastError: any;
+
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      return await action();
+    } catch (error) {
+      lastError = error;
+      console.log(
+        `⚠️ Falló ${label} (intento ${attempt}/${retries}). Reintentando...`
+      );
+      if (attempt < retries) {
+        await new Promise((r) => setTimeout(r, delayMs));
+      }
+    }
+  }
+
+  console.error(`❌ ${label} falló tras ${retries} intentos`);
+  throw lastError;
+}
+```
+
+### Function Signature
+
+```typescript
+retryUntilSuccess<T>(
+  action: () => Promise<T>,
+  options?: {
+    retries?: number;    // Default: 5
+    delayMs?: number;    // Default: 1000ms
+    label?: string;      // Default: "acción"
+  }
+): Promise<T>
+```
+
+**Parameters:**
+- `action` - Async function to retry
+- `retries` - Maximum retry attempts (default: 5)
+- `delayMs` - Delay between retries in milliseconds (default: 1000)
+- `label` - Operation name for logging (default: "acción")
+
+**Returns:**
+- Result of successful `action()` execution
+- Throws last error if all retries fail
+
+## Retry Configuration
+
+### Default Settings
+
+```typescript
+const DEFAULT_CONFIG = {
+  retries: 5,        // 5 attempts total
+  delayMs: 1000,     // 1 second between attempts
+  label: "acción"    // Generic label
+};
+```
+
+**Total time:** Up to 5 seconds (5 attempts × 1s delay) plus execution time
+
+### Custom Configuration Examples
+
+```typescript
+// Quick retry for fast operations
+await retryUntilSuccess(
+  async () => await input.click(),
+  { retries: 3, delayMs: 500, label: "click input" }
+);
+
+// Patient retry for slow operations
+await retryUntilSuccess(
+  async () => await page.goto(url),
+  { retries: 10, delayMs: 2000, label: "page navigation" }
+);
+
+// Single retry (minimal overhead)
+await retryUntilSuccess(
+  async () => await element.isVisible(),
+  { retries: 2, delayMs: 100, label: "visibility check" }
+);
+```
+
+## Usage Patterns
+
+All critical automation functions are wrapped in retry logic:
+
+### Login Operation
+
+```typescript
+async function login(
+  page: Page,
+  username: string,
+  password: string,
+  documentoSoporteLabelCode: string,
+  nit: string,
+  nit_empresa: string
+) {
+  await retryUntilSuccess(
+    async () => {
+      // Complete login flow
+      await page.goto("https://siigonube.siigo.com/#/login");
+      await page.waitForLoadState("domcontentloaded", { timeout: 60000 });
+      // ... rest of login logic
+    },
+    { label: "login a Siigo" }
+  );
+}
+```
+
+**Why:** Login involves multiple network requests and page transitions. Retry ensures authentication succeeds even with network hiccups.
+
+### Product Selection
+
+```typescript
+async function selectProducto(page: Page, codigo: string) {
+  await retryUntilSuccess(
+    async () => {
+      const input = page.locator(
+        "#trEditRow #editProduct #autocomplete_autocompleteInput"
+      );
+      await input.click();
+      await input.clear();
+      await input.pressSequentially(codigo, { delay: 150 });
+      await page.locator(".siigo-ac-table tr").first().waitFor();
+      // ... selection logic
+    },
+    { label: "selección de producto" }
+  );
+}
+```
+
+**Why:** Autocomplete depends on Angular reactivity and API responses. Retry handles delayed suggestions or failed searches.
+
+### Warehouse Selection
+
+```typescript
+async function selectBodega(page: Page, nombre: string) {
+  await retryUntilSuccess(
+    async () => {
+      const input = page.locator(
+        "#trEditRow #editProductWarehouse #autocomplete_autocompleteInput"
+      );
+      await input.click();
+      await page.locator(".suggestions table.siigo-ac-table tr").first().waitFor();
+      // ... selection logic
+    },
+    { label: "selección de bodega" }
+  );
+}
+```
+
+### Row Preparation
+
+```typescript
+export async function prepararNuevaFila(page: Page) {
+  await retryUntilSuccess(
+    async () => {
+      const inputBusqueda = page.locator(
+        "#trEditRow #editProduct #autocomplete_autocompleteInput"
+      );
+      const botonAgregar = page.locator("#new-item, #new-item-text").first();
+
+      if (await inputBusqueda.isVisible()) {
+        if (await inputBusqueda.isEnabled()) {
+          return; // Already ready
+        }
+      }
+
+      // Force open new row
+      await botonAgregar.click({ force: true });
+      await inputBusqueda.waitFor({ state: "visible", timeout: 10000 });
+    },
+    { label: "preparar nueva fila" }
+  );
+}
+```
+
+**Why:** DOM state can be inconsistent after adding items. Retry ensures the form is ready for the next product.
+
+### Quantity and Value Input
+
+```typescript
+async function llenarCantidadValor(
+  page: Page,
+  cantidad: number,
+  valor: number
+) {
+  await retryUntilSuccess(
+    async () => {
+      const inputCantidad = page.locator(
+        'siigo-inputdecimal[formcontrolname="editQuantity"] input.dx-texteditor-input'
+      );
+      const inputValor = page.locator(
+        'siigo-inputdecimal[formcontrolname="editUnitValue"] input.dx-texteditor-input'
+      );
+
+      await inputCantidad.waitFor({ state: "visible" });
+      await inputCantidad.fill(cantidad.toString());
+      await inputValor.fill(valor.toString());
+
+      const botonAgregar = page
+        .locator("#new-item")
+        .or(page.getByText("Agregar otro ítem"))
+        .first();
+
+      await botonAgregar.click({ force: true });
+      await expect(inputCantidad).toHaveValue("", { timeout: 10000 });
+      await page.waitForTimeout(1000);
+    },
+    { label: "llenar cantidad y valor" }
+  );
+}
+```
+
+**Why:** Form submission can fail if Siigo's backend is slow. Retry ensures the item is added successfully.
+
+### Payment Selection
+
+```typescript
+async function seleccionarPago(page: Page, cuentaNombre: string) {
+  await retryUntilSuccess(
+    async () => {
+      const dropdownAcc = page.locator("#editingAcAccount_autocompleteInput");
+      await dropdownAcc.waitFor({ timeout: 10000 });
+      await dropdownAcc.click();
+      await page.locator(".suggestions .siigo-ac-table").first().waitFor();
+      await page
+        .locator(
+          `.suggestions .siigo-ac-table tr:has(div:has-text("${cuentaNombre}"))`
+        )
+        .click();
+      await page.close();
+    },
+    { label: "selección de pago" }
+  );
+}
+```
+
+**Why:** Final step must succeed to complete document. Retry prevents losing all work due to a single click failure.
+
+## Retry Flow
+
+<Steps>
+  <Step title="Attempt 1">
+    Execute action immediately
+  </Step>
+  
+  <Step title="On Failure">
+    Catch error, log warning with attempt number
+  </Step>
+  
+  <Step title="Wait">
+    Sleep for `delayMs` milliseconds (default: 1000ms)
+  </Step>
+  
+  <Step title="Retry">
+    Execute action again (up to `retries` total attempts)
+  </Step>
+  
+  <Step title="Success">
+    Return result and exit
+  </Step>
+  
+  <Step title="All Retries Exhausted">
+    Log final error and throw last exception
+  </Step>
+</Steps>
+
+## Logging Output
+
+### Successful Retry Example
+
+```
+⚠️ Falló selección de producto (intento 1/5). Reintentando...
+⚠️ Falló selección de producto (intento 2/5). Reintentando...
+✅ selección de producto succeeded
+```
+
+### Failed Operation Example
+
+```
+⚠️ Falló login a Siigo (intento 1/5). Reintentando...
+⚠️ Falló login a Siigo (intento 2/5). Reintentando...
+⚠️ Falló login a Siigo (intento 3/5). Reintentando...
+⚠️ Falló login a Siigo (intento 4/5). Reintentando...
+⚠️ Falló login a Siigo (intento 5/5). Reintentando...
+❌ login a Siigo falló tras 5 intentos
+Error: TimeoutError: Timeout 60000ms exceeded
+```
+
+## Error Recovery Strategies
+
+### Idempotent Operations
+
+The retry mechanism works because operations are **idempotent**:
+
+```typescript
+// Idempotent: Can be retried safely
+await input.clear();
+await input.fill(value);
+
+// Idempotent: Navigation resets state
+await page.goto(url);
+
+// Idempotent: Click is safe to retry (worst case: same state)
+await button.click();
+```
+
+<Warning>
+  Ensure operations inside `retryUntilSuccess()` are idempotent. Non-idempotent actions (e.g., incrementing a counter) will produce incorrect results on retry.
+</Warning>
+
+### State Reset
+
+Some operations reset state on retry:
+
+```typescript
+await retryUntilSuccess(
+  async () => {
+    await input.clear(); // Reset state
+    await input.pressSequentially(value, { delay: 150 });
+    // If this fails, next retry clears and starts fresh
+  },
+  { label: "input fill" }
+);
+```
+
+### Partial Progress
+
+The retry wraps the **entire atomic operation**:
+
+```typescript
+// ✅ GOOD - Entire login is atomic
+await retryUntilSuccess(
+  async () => {
+    await page.goto(url);
+    await usernameInput.fill(username);
+    await passwordInput.fill(password);
+    await loginButton.click();
+  },
+  { label: "login" }
+);
+
+// ❌ BAD - Partial retry leaves inconsistent state
+await page.goto(url);
+await retryUntilSuccess(
+  async () => await usernameInput.fill(username),
+  { label: "fill username" }
+);
+```
+
+## Performance Impact
+
+### Best Case (No Failures)
+
+```
+Execution time = action() time
+Overhead: Negligible (~1ms for try-catch)
+```
+
+### Worst Case (All Retries)
+
+```
+Execution time = (action() time × retries) + (delayMs × (retries - 1))
+Example: (2s × 5) + (1s × 4) = 14 seconds
+```
+
+### Average Case (1-2 Retries)
+
+```
+Execution time = (action() time × 2) + (delayMs × 1)
+Example: (2s × 2) + 1s = 5 seconds
+```
+
+## Advanced Patterns
+
+### Exponential Backoff (Future Enhancement)
+
+```typescript
+// Current: Fixed delay
+delayMs = 1000; // Always 1 second
+
+// Potential: Exponential backoff
+delayMs = Math.min(1000 * Math.pow(2, attempt - 1), 10000);
+// Attempt 1: 1000ms
+// Attempt 2: 2000ms
+// Attempt 3: 4000ms
+// Attempt 4: 8000ms
+// Attempt 5: 10000ms (capped)
+```
+
+### Conditional Retry (Future Enhancement)
+
+```typescript
+// Only retry on specific errors
+if (error instanceof TimeoutError || error instanceof NetworkError) {
+  // Retry
+} else {
+  // Fail immediately
+  throw error;
+}
+```
+
+### Circuit Breaker (Future Enhancement)
+
+```typescript
+// Stop retrying if service is consistently down
+if (consecutiveFailures > 10) {
+  throw new Error("Circuit breaker open: Service unavailable");
+}
+```
+
+## Best Practices
+
+<Steps>
+  <Step title="Wrap Critical Operations">
+    Use retry for all network-dependent operations (login, search, submit)
+  </Step>
+  
+  <Step title="Use Descriptive Labels">
+    Labels help debug which operation is failing:
+    ```typescript
+    { label: "selección de producto" }
+    ```
+  </Step>
+  
+  <Step title="Keep Operations Atomic">
+    Wrap complete logical units, not individual steps
+  </Step>
+  
+  <Step title="Balance Retries and Delays">
+    More retries = longer wait time. Tune for your use case.
+  </Step>
+  
+  <Step title="Monitor Logs">
+    Track retry frequency to identify systemic issues
+  </Step>
+</Steps>
+
+## Common Scenarios
+
+### Scenario 1: Slow Network
+
+**Problem:** Siigo API takes 5+ seconds to respond
+
+**Solution:** Increase individual Playwright timeouts, keep retries at 5
+
+```typescript
+await element.waitFor({ timeout: 15000 }); // Inside retry block
+```
+
+### Scenario 2: Intermittent Server Errors
+
+**Problem:** Siigo returns 500 errors 10% of the time
+
+**Solution:** Default retry settings (5 attempts) handle this well
+
+### Scenario 3: DOM Race Condition
+
+**Problem:** Angular re-renders element during interaction
+
+**Solution:** Retry catches `StaleElementError` and re-locates
+
+### Scenario 4: Overloaded Server
+
+**Problem:** Siigo slows down during peak hours
+
+**Solution:** Increase `delayMs` to give server more breathing room
+
+```typescript
+{ retries: 5, delayMs: 3000 } // 3 seconds between attempts
+```
+
+## Debugging Retry Issues
+
+### Check Retry Count
+
+If operations consistently retry 4-5 times:
+
+```
+⚠️ Falló selección de producto (intento 4/5). Reintentando...
+```
+
+**Action:** Investigate root cause (slow server, wrong selector, network issues)
+
+### Monitor Total Time
+
+If automation takes much longer than expected:
+
+**Action:** Reduce retries or delayMs for non-critical operations
+
+### Analyze Error Messages
+
+If same error repeats across retries:
+
+```
+❌ selección de producto falló tras 5 intentos
+Error: Element not found: .siigo-ac-table
+```
+
+**Action:** Fix selector or wait strategy, not a transient error
+
+## Integration with Playwright
+
+Playwright has built-in retries, but at a lower level:
+
+```typescript
+// Playwright's auto-waiting (5 seconds default)
+await element.click(); // Retries internally
+
+// Our retry wrapper (5 attempts × 1 second = 5+ seconds)
+await retryUntilSuccess(
+  async () => await element.click(),
+  { label: "click element" }
+);
+```
+
+**Layered Resilience:**
+1. Playwright's internal auto-wait (5s)
+2. Our retry mechanism (5 attempts × 1s = 5s)
+3. Total resilience: Up to 10+ seconds for success
+
+## Summary
+
+| Aspect | Value |
+|--------|-------|
+| **Default Retries** | 5 attempts |
+| **Default Delay** | 1000ms (1 second) |
+| **Total Timeout** | 5+ seconds (excluding action time) |
+| **Error Handling** | Throw last error after exhausting retries |
+| **Logging** | Warning per attempt, error on final failure |
+| **Use Cases** | Login, search, form submission, navigation |
+
+<CardGroup cols={2}>
+  <Card title="Siigo Integration" icon="building" href="/automation/siigo-integration">
+    High-level automation workflow
+  </Card>
+  <Card title="Browser Automation" icon="browser" href="/automation/browser-automation">
+    Playwright locator strategies
+  </Card>
+</CardGroup>

@@ -1,0 +1,499 @@
+---
+title: "Helper Utilities"
+description: "Retry logic and string manipulation helpers for robust automation"
+---
+
+This module provides essential helper utilities for error handling and data formatting. These functions improve reliability and data consistency throughout the scraping workflow.
+
+## Retry Logic
+
+### retryUntilSuccess()
+
+Executes an async action with automatic retry logic until it succeeds or exhausts all attempts.
+
+```typescript
+export async function retryUntilSuccess<T>(
+  action: () => Promise<T>,
+  {
+    retries = 5,
+    delayMs = 1000,
+    label = "acción",
+  }: {
+    retries?: number;
+    delayMs?: number;
+    label?: string;
+  } = {}
+): Promise<T>
+```
+
+**Parameters:**
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `action` | `() => Promise<T>` | (required) | Async function to execute |
+| `retries` | `number` | `5` | Maximum number of retry attempts |
+| `delayMs` | `number` | `1000` | Delay between retries in milliseconds |
+| `label` | `string` | `"acción"` | Descriptive label for logging |
+
+**Returns:** `Promise<T>`
+- Returns the result of `action()` on success
+- Throws the last error after all retries are exhausted
+
+### How It Works
+
+<Steps>
+  <Step title="Execute Action">
+    Attempts to execute the provided async function
+  </Step>
+  
+  <Step title="Handle Success">
+    If the action succeeds, returns the result immediately
+  </Step>
+  
+  <Step title="Handle Failure">
+    If the action throws an error:
+    - Logs a warning with attempt number
+    - Waits for the specified delay
+    - Retries the action
+  </Step>
+  
+  <Step title="Exhaust Retries">
+    After all retries fail:
+    - Logs a final error message
+    - Throws the last caught error
+  </Step>
+</Steps>
+
+### Usage Examples
+
+#### Basic Usage
+
+```typescript
+import { retryUntilSuccess } from "./utils/retryUntilSucces.ts";
+
+const result = await retryUntilSuccess(
+  async () => {
+    const response = await fetch("https://api.example.com/data");
+    if (!response.ok) throw new Error("Request failed");
+    return response.json();
+  },
+  {
+    label: "API request"
+  }
+);
+```
+
+#### With Custom Configuration
+
+```typescript
+await retryUntilSuccess(
+  async () => {
+    await page.click("#submit-button");
+  },
+  {
+    retries: 10,        // Try up to 10 times
+    delayMs: 2000,      // Wait 2 seconds between attempts
+    label: "submit button click"
+  }
+);
+```
+
+#### Wrapping Playwright Actions
+
+```typescript
+import { retryUntilSuccess } from "./utils/retryUntilSucces.ts";
+
+await retryUntilSuccess(
+  async () => {
+    // Complex interaction that might fail
+    const input = page.locator("#search-input");
+    await input.click();
+    await input.fill("search term");
+    await page.locator(".results").first().waitFor();
+    await page.locator(".results").first().click();
+  },
+  {
+    label: "search and select"
+  }
+);
+```
+
+### Logging Output
+
+The function provides clear console feedback:
+
+**During Retries:**
+```
+⚠️ Falló login a Siigo (intento 1/5). Reintentando...
+⚠️ Falló login a Siigo (intento 2/5). Reintentando...
+```
+
+**After All Failures:**
+```
+❌ login a Siigo falló tras 5 intentos
+```
+
+### Real-World Usage in Codebase
+
+This utility is extensively used throughout `functions.ts` to make browser automation robust:
+
+<Tabs>
+  <Tab title="Login">
+    ```typescript
+    async function login(
+      page: Page,
+      username: string,
+      password: string,
+      documentoSoporteLabelCode: string,
+      nit: string,
+      nit_empresa: string
+    ) {
+      await retryUntilSuccess(
+        async () => {
+          await page.goto("https://siigonube.siigo.com/#/login");
+          await page.waitForLoadState("domcontentloaded", { timeout: 60000 });
+          // ... rest of login flow
+        },
+        {
+          label: "login a Siigo",
+        }
+      );
+    }
+    ```
+    
+    **Reference:** utils/functions.ts:20-88
+  </Tab>
+  
+  <Tab title="Product Selection">
+    ```typescript
+    async function selectProducto(page: Page, codigo: string) {
+      await retryUntilSuccess(
+        async () => {
+          const input = page.locator(
+            "#trEditRow #editProduct #autocomplete_autocompleteInput"
+          );
+          await input.click();
+          await input.clear();
+          await input.pressSequentially(codigo, { delay: 150 });
+          // ... wait and select from suggestions
+        },
+        { label: "selección de producto" }
+      );
+    }
+    ```
+    
+    **Reference:** utils/functions.ts:92-125
+  </Tab>
+  
+  <Tab title="Warehouse Selection">
+    ```typescript
+    async function selectBodega(page: Page, nombre: string) {
+      await retryUntilSuccess(
+        async () => {
+          const input = page.locator(
+            "#trEditRow #editProductWarehouse #autocomplete_autocompleteInput"
+          );
+          await input.click();
+          await page.locator(".suggestions table.siigo-ac-table tr").first().waitFor();
+          // ... select warehouse
+        },
+        { label: "selección de bodega" }
+      );
+    }
+    ```
+    
+    **Reference:** utils/functions.ts:128-151
+  </Tab>
+  
+  <Tab title="Prepare Row">
+    ```typescript
+    export async function prepararNuevaFila(page: Page) {
+      await retryUntilSuccess(
+        async () => {
+          const inputBusqueda = page.locator(
+            "#trEditRow #editProduct #autocomplete_autocompleteInput"
+          );
+          const botonAgregar = page.locator("#new-item, #new-item-text").first();
+          
+          if (await inputBusqueda.isVisible()) {
+            if (await inputBusqueda.isEnabled()) {
+              return;
+            }
+          }
+          // ... force open new row
+        },
+        { label: "preparar nueva fila" }
+      );
+    }
+    ```
+    
+    **Reference:** utils/functions.ts:154-191
+  </Tab>
+  
+  <Tab title="Fill Data">
+    ```typescript
+    async function llenarCantidadValor(
+      page: Page,
+      cantidad: number,
+      valor: number
+    ) {
+      await retryUntilSuccess(
+        async () => {
+          const inputCantidad = page.locator(
+            'siigo-inputdecimal[formcontrolname="editQuantity"] input.dx-texteditor-input'
+          );
+          const inputValor = page.locator(
+            'siigo-inputdecimal[formcontrolname="editUnitValue"] input.dx-texteditor-input'
+          );
+          
+          await inputCantidad.waitFor({ state: "visible" });
+          await inputCantidad.fill(cantidad.toString());
+          await inputValor.fill(valor.toString());
+          // ... click add button
+        },
+        { label: "llenar cantidad y valor" }
+      );
+    }
+    ```
+    
+    **Reference:** utils/functions.ts:194-245
+  </Tab>
+  
+  <Tab title="Payment Selection">
+    ```typescript
+    async function seleccionarPago(page: Page, cuentaNombre: string) {
+      await retryUntilSuccess(
+        async () => {
+          const dropdownAcc = page.locator("#editingAcAccount_autocompleteInput");
+          await dropdownAcc.waitFor({ timeout: 10000 });
+          await dropdownAcc.click();
+          // ... select payment account
+          await page.close();
+        },
+        { label: "selección de pago" }
+      );
+    }
+    ```
+    
+    **Reference:** utils/functions.ts:248-268
+  </Tab>
+</Tabs>
+
+### Why Retry Logic is Critical
+
+Web automation faces numerous transient failures:
+
+- **Network delays:** API responses or page loads
+- **DOM timing:** Elements not yet rendered
+- **Angular/React updates:** State changes in progress
+- **Animation interference:** Elements moving during clicks
+- **Race conditions:** Multiple async operations
+- **Server-side processing:** Backend delays
+
+The `retryUntilSuccess()` utility makes the scraper resilient to all these issues without cluttering code with manual retry logic.
+
+### Best Practices
+
+<AccordionGroup>
+  <Accordion title="Choose Appropriate Retry Counts">
+    - **Fast operations (clicks, fills):** 5 retries (default)
+    - **Slow operations (page loads):** 10+ retries
+    - **Critical operations (login):** 10+ retries with longer delays
+  </Accordion>
+  
+  <Accordion title="Set Meaningful Labels">
+    Good labels help debug failures:
+    ```typescript
+    // ❌ Bad - generic
+    { label: "action" }
+    
+    // ✅ Good - specific
+    { label: "login a Siigo" }
+    { label: "selección de producto MAT-001" }
+    ```
+  </Accordion>
+  
+  <Accordion title="Adjust Delays for Operation Type">
+    - **UI interactions:** 1000ms (default)
+    - **API calls:** 2000-5000ms
+    - **File operations:** 500-1000ms
+  </Accordion>
+  
+  <Accordion title="Keep Actions Idempotent">
+    Ensure retried actions can be safely repeated:
+    ```typescript
+    // ✅ Good - clears before filling
+    await input.clear();
+    await input.fill("value");
+    
+    // ❌ Bad - appends on retry
+    await input.pressSequentially("value");
+    ```
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## String Utilities
+
+### agregarEspacios()
+
+Adds leading and trailing spaces to a string.
+
+```typescript
+export function agregarEspacios(str: string): string
+```
+
+**Parameters:**
+- `str`: Input string
+
+**Returns:** String with spaces added: `" " + str + " "`
+
+### Why This Exists
+
+Siigo's autocomplete fields often require exact matches including spacing. Many account names and warehouse names in Siigo have leading/trailing spaces:
+
+- `" BODEGA DE RIOHACHA "`
+- `" CAJA RIOHACHA "`
+- `" Efectivo "`
+
+This utility ensures consistent formatting when these values are constructed dynamically.
+
+### Usage Examples
+
+```typescript
+import { agregarEspacios } from "./utils/agregarEspacios.ts";
+
+// Format warehouse name
+const bodega = agregarEspacios("BODEGA DE RIOHACHA");
+console.log(bodega); // " BODEGA DE RIOHACHA "
+
+// Format account name
+const cuenta = agregarEspacios("CAJA RIOHACHA");
+console.log(cuenta); // " CAJA RIOHACHA "
+
+// Use in Siigo interaction
+await selectBodega(page, agregarEspacios("BODEGA DE RIOHACHA"));
+await seleccionarPago(page, agregarEspacios("CAJA RIOHACHA"));
+```
+
+### Current Usage
+
+While imported in `transformDs.ts`, this utility is currently used for hardcoded values in `main.ts`:
+
+```typescript
+// main.ts:8-11
+const bodegaRiohacha = " BODEGA DE RIOHACHA ";
+const cuentaContableCorprecam = " CAJA RIOHACHA ";
+const cuentaContableReciclemos = " Efectivo ";
+```
+
+The utility exists for potential future dynamic construction of these values from database records or configuration.
+
+---
+
+## Error Handling Pattern
+
+Combining retry logic with proper error handling:
+
+```typescript
+import { retryUntilSuccess } from "./utils/retryUntilSucces.ts";
+
+try {
+  await retryUntilSuccess(
+    async () => {
+      // Your potentially failing operation
+      await someUnreliableOperation();
+    },
+    {
+      retries: 5,
+      delayMs: 1000,
+      label: "operation name"
+    }
+  );
+  
+  console.log("✅ Operation succeeded");
+  
+} catch (error) {
+  console.error("❌ Operation failed after all retries:", error);
+  // Handle final failure (log, alert, fallback, etc.)
+  throw error; // Re-throw if needed
+}
+```
+
+---
+
+## Performance Considerations
+
+### Retry Budget
+
+With default settings (5 retries, 1000ms delay), each operation has:
+- **Maximum time:** ~5 seconds (if all retries fail)
+- **Typical time:** 0-2 seconds (succeeds on first or second attempt)
+
+### Optimization Tips
+
+1. **Start with lower retries** for operations that typically succeed
+2. **Increase retries** only for known-flaky operations
+3. **Use exponential backoff** for rate-limited APIs:
+
+```typescript
+async function retryWithBackoff<T>(
+  action: () => Promise<T>,
+  maxRetries = 5
+): Promise<T> {
+  for (let i = 0; i < maxRetries; i++) {
+    try {
+      return await action();
+    } catch (error) {
+      if (i === maxRetries - 1) throw error;
+      await new Promise(r => setTimeout(r, Math.pow(2, i) * 1000));
+    }
+  }
+  throw new Error("Unreachable");
+}
+```
+
+---
+
+## Testing Helpers
+
+Utilities for testing retry logic:
+
+```typescript
+// Simulate flaky operation
+let attempts = 0;
+await retryUntilSuccess(
+  async () => {
+    attempts++;
+    if (attempts < 3) {
+      throw new Error("Simulated failure");
+    }
+    return "success";
+  },
+  { label: "test operation" }
+);
+
+console.log(`Succeeded after ${attempts} attempts`);
+```
+
+---
+
+## Dependencies
+
+```typescript
+// retryUntilSucces.ts has no dependencies
+
+// agregarEspacios.ts has no dependencies
+```
+
+Both utilities are self-contained with no external dependencies.
+
+---
+
+## Related Documentation
+
+- [Core Functions](/utilities/functions) - All browser automation functions use `retryUntilSuccess()`
+- [Data Transformations](/utilities/transformations) - Imports `agregarEspacios()` for string formatting
+- [Troubleshooting](/troubleshooting/debugging) - Comprehensive debugging strategies
+- [Configuration](/configuration) - Configure environment variables

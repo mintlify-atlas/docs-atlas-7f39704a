@@ -1,97 +1,79 @@
 ---
-title: "Introduction"
-description: "Welcome to the new home for your documentation"
+title: "Welcome to Siigo Corprecam Scraper"
+description: "Automated web scraping and data entry tool for Siigo accounting system using Playwright"
 ---
 
-## Setting up
+# Siigo Corprecam Scraper
 
-Get your documentation site up and running in minutes.
+Automate your Siigo accounting workflows with intelligent browser automation. This tool streamlines purchase data entry by scraping external APIs and automatically filling Siigo document support forms using Playwright.
 
-<Card
-  title="Start here"
-  icon="rocket"
-  href="/quickstart"
-  horizontal
->
-  Follow our three step quickstart guide.
-</Card>
+## Key Features
 
-## Make it yours
-
-Design a docs site that looks great and empowers your users.
-
-<Columns cols={2}>
-  <Card
-    title="Edit locally"
-    icon="pen-to-square"
-    href="/development"
-  >
-    Edit your docs locally and preview them in real time.
+<CardGroup cols={2}>
+  <Card title="Automated Data Entry" icon="robot" color="#1e40af">
+    Automatically creates Siigo document support entries from purchase data
   </Card>
-  <Card
-    title="Customize your site"
-    icon="palette"
-    href="/essentials/settings"
-  >
-    Customize the design and colors of your site to match your brand.
+  <Card title="Multi-Company Support" icon="building" color="#60a5fa">
+    Handles both Corprecam and Reciclemos companies with separate workflows
   </Card>
-    <Card
-    title="Set up navigation"
-    icon="map"
-    href="/essentials/navigation"
-  >
-    Organize your docs to help users find what they need and succeed with your product.
+  <Card title="Resilient Automation" icon="rotate" color="#1e40af">
+    Built-in retry logic ensures reliable execution even with network issues
   </Card>
-  <Card
-    title="API documentation"
-    icon="terminal"
-    href="/api-reference/introduction"
-  >
-    Auto-generate API documentation from OpenAPI specifications.
+  <Card title="Ngrok Integration" icon="tunnel" color="#60a5fa">
+    Expose local server via ngrok for seamless webhook integration
   </Card>
-</Columns>
+</CardGroup>
 
-## Create beautiful pages
+## Quick Start
 
-Everything you need to create world-class documentation.
+Get up and running in minutes with our quickstart guide.
 
-<Columns cols={2}>
-  <Card
-    title="Write with MDX"
-    icon="pen-fancy"
-    href="/essentials/markdown"
-  >
-    Use MDX to style your docs pages.
+<CardGroup cols={2}>
+  <Card title="Quickstart Guide" icon="rocket" href="/quickstart">
+    Install and run your first automation in under 5 minutes
   </Card>
-  <Card
-    title="Code samples"
-    icon="code"
-    href="/essentials/code"
-  >
-    Add sample code to demonstrate how to use your product.
+  <Card title="Configuration" icon="gear" href="/configuration">
+    Set up environment variables and configure the application
   </Card>
-  <Card
-    title="Images"
-    icon="image"
-    href="/essentials/images"
-  >
-    Display images and other media.
-  </Card>
-  <Card
-    title="Reusable snippets"
-    icon="recycle"
-    href="/essentials/reusable-snippets"
-  >
-    Write once and reuse across your docs.
-  </Card>
-</Columns>
+</CardGroup>
 
-## Need inspiration?
+## Architecture
 
-<Card
-  title="See complete examples"
-  icon="stars"
-  href="https://mintlify.com/customers"
->
-  Browse our showcase of exceptional documentation sites.
+Understand how the system works under the hood.
+
+<CardGroup cols={3}>
+  <Card title="System Overview" icon="diagram-project" href="/architecture/overview">
+    High-level architecture and component interaction
+  </Card>
+  <Card title="Workflow" icon="arrows-turn-right" href="/architecture/workflow">
+    Step-by-step automation workflow
+  </Card>
+  <Card title="Data Flow" icon="arrow-progress" href="/architecture/data-flow">
+    How data moves through the system
+  </Card>
+</CardGroup>
+
+## API & Automation
+
+Explore the API endpoints and automation capabilities.
+
+<CardGroup cols={2}>
+  <Card title="API Endpoints" icon="code" href="/api/endpoints">
+    REST API documentation and usage examples
+  </Card>
+  <Card title="Siigo Integration" icon="browser" href="/automation/siigo-integration">
+    Browser automation for Siigo forms
+  </Card>
+  <Card title="External APIs" icon="webhook" href="/api/external-apis">
+    Integration with external PHP APIs
+  </Card>
+  <Card title="Data Models" icon="database" href="/api/data-models">
+    TypeScript interfaces and data structures
+  </Card>
+</CardGroup>
+
+## Need Help?
+
+<Card title="Troubleshooting" icon="wrench" href="/troubleshooting/common-issues">
+  Common issues and solutions for debugging automation problems
 </Card>
