@@ -15,7 +15,7 @@ Never commit your `.env` file to version control. Add it to `.gitignore` to prev
 
 The application loads configuration from:
 
-```
+```text
 project-root/
 ├── .env          # Your environment variables (create this file)
 ├── config.ts     # Configuration loader (DO NOT EDIT)
@@ -221,7 +221,7 @@ The config object is imported throughout the application (server.ts:4, main.ts:3
 
 For different environments (development, staging, production), you can create separate environment files:
 
-```
+```text
 .env.development
 .env.staging
 .env.production
@@ -265,7 +265,7 @@ This ensures only the file owner can read and write the file.
 
 Ensure your `.gitignore` includes:
 
-```
+```text
 .env
 .env.*
 !.env.example

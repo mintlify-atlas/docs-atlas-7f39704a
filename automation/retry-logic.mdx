@@ -310,7 +310,7 @@ async function seleccionarPago(page: Page, cuentaNombre: string) {
 
 ### Successful Retry Example
 
-```
+```text
 ⚠️ Falló selección de producto (intento 1/5). Reintentando...
 ⚠️ Falló selección de producto (intento 2/5). Reintentando...
 ✅ selección de producto succeeded
@@ -318,7 +318,7 @@ async function seleccionarPago(page: Page, cuentaNombre: string) {
 
 ### Failed Operation Example
 
-```
+```text
 ⚠️ Falló login a Siigo (intento 1/5). Reintentando...
 ⚠️ Falló login a Siigo (intento 2/5). Reintentando...
 ⚠️ Falló login a Siigo (intento 3/5). Reintentando...
@@ -393,21 +393,21 @@ await retryUntilSuccess(
 
 ### Best Case (No Failures)
 
-```
+```text
 Execution time = action() time
 Overhead: Negligible (~1ms for try-catch)
 ```
 
 ### Worst Case (All Retries)
 
-```
+```text
 Execution time = (action() time × retries) + (delayMs × (retries - 1))
 Example: (2s × 5) + (1s × 4) = 14 seconds
 ```
 
 ### Average Case (1-2 Retries)
 
-```
+```text
 Execution time = (action() time × 2) + (delayMs × 1)
 Example: (2s × 2) + 1s = 5 seconds
 ```
@@ -517,7 +517,7 @@ await element.waitFor({ timeout: 15000 }); // Inside retry block
 
 If operations consistently retry 4-5 times:
 
-```
+```text
 ⚠️ Falló selección de producto (intento 4/5). Reintentando...
 ```
 
@@ -533,7 +533,7 @@ If automation takes much longer than expected:
 
 If same error repeats across retries:
 
-```
+```text
 ❌ selección de producto falló tras 5 intentos
 Error: Element not found: .siigo-ac-table
 ```
