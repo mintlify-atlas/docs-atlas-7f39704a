@@ -1,0 +1,92 @@
+{
+  "projectType": "general",
+  "projectName": "Siigo Corprecam Scraper",
+  "projectDescription": "Automated web scraping and data entry tool for Siigo accounting system using Playwright",
+  "theme": "aspen",
+  "primaryColor": "#1e40af",
+  "lightColor": "#60a5fa",
+  "darkColor": "#1e3a8a",
+  "navigation": {
+    "groups": [
+      {
+        "group": "Overview",
+        "pages": [
+          "introduction",
+          "quickstart"
+        ]
+      },
+      {
+        "group": "Getting Started",
+        "pages": [
+          "installation",
+          "configuration",
+          "running"
+        ]
+      },
+      {
+        "group": "Architecture",
+        "pages": [
+          "architecture/overview",
+          "architecture/workflow",
+          "architecture/data-flow"
+        ]
+      },
+      {
+        "group": "API Reference",
+        "pages": [
+          "api/endpoints",
+          "api/external-apis",
+          "api/data-models"
+        ]
+      },
+      {
+        "group": "Automation",
+        "pages": [
+          "automation/siigo-integration",
+          "automation/browser-automation",
+          "automation/retry-logic"
+        ]
+      },
+      {
+        "group": "Utilities",
+        "pages": [
+          "utilities/functions",
+          "utilities/transformations",
+          "utilities/helpers"
+        ]
+      },
+      {
+        "group": "Troubleshooting",
+        "pages": [
+          "troubleshooting/common-issues",
+          "troubleshooting/debugging"
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Automated Siigo document support creation",
+    "Purchase data scraping from external API",
+    "Playwright-based browser automation",
+    "Ngrok tunnel integration",
+    "MySQL database integration",
+    "Multi-company support (Corprecam/Reciclemos)",
+    "Retry logic for resilient automation"
+  ],
+  "publicApiSurface": [
+    "POST /scrapping",
+    "run_playwright(documentoSoporte)",
+    "getCompras(com_codigo)",
+    "getCompraItems(com_codigo)",
+    "getMateriales(ids)",
+    "getMicro(com_micro_ruta)",
+    "transfromDs(compra, compraItems, materiales, micros)",
+    "playwright_corprecam_reciclemos(...)",
+    "launchBrowser()",
+    "login(page, username, password, ...)",
+    "selectProducto(page, codigo)",
+    "selectBodega(page, nombre)",
+    "llenarCantidadValor(page, cantidad, valor)",
+    "seleccionarPago(page, cuentaNombre)"
+  ]
+}
